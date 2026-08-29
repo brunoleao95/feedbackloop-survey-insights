@@ -104,3 +104,35 @@ def test_cadeia_do_llm_construivel():
 
     assert hasattr(cliente, "completar"), "o cliente nao expoe o metodo completar"
     assert cliente.modelo, "o modelo do cliente esta vazio"
+
+
+def test_app_importavel_sem_configuracao_extra():
+    """O modulo da interface carrega com o ambiente que esta documentado.
+
+    Regressao do incidente de rollback desta etapa. Uma mudanca tornou a coluna
+    de resposta configuravel lendo `os.environ["COLUNA_RESPOSTA"]` no nivel de
+    modulo. A variavel existia na maquina de quem escreveu e nao existia nas
+    plataformas, entao producao passou a responder apenas com um traceback.
+
+    O que torna esse caso instrutivo e o que NAO o pegou: os 7 testes offline
+    passaram, porque cobrem o pacote `feedbackloop/` e nao o `app.py`; o
+    healthcheck respondeu ok, porque o servidor do Streamlit sobe mesmo quando o
+    script falha; e o teste da pagina passou, porque o HTML de casca e servido
+    antes de o script rodar. O pipeline ficou inteiramente verde com a aplicacao
+    inutilizavel.
+
+    Importar o modulo executa todo o codigo de nivel superior, que e onde esse
+    tipo de defeito mora. Se `app.py` passar a exigir uma variavel de ambiente
+    nao documentada em `.env.example`, este teste quebra no pipeline em vez de
+    quebrar na frente do usuario.
+    """
+    import importlib
+
+    if "OPENAI_API_KEY" not in os.environ:
+        # O modulo nao usa a chave na importacao, mas manter o ambiente
+        # previsivel evita que uma mudanca futura torne o teste instavel.
+        os.environ["OPENAI_API_KEY"] = "sk-chave-falsa-apenas-para-importacao"
+
+    modulo = importlib.import_module("app")
+    assert hasattr(modulo, "main"), "app.py nao expoe main()"
+    assert modulo.COLUNA_RESPOSTA, "COLUNA_RESPOSTA vazia"

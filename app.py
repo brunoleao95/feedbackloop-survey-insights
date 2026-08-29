@@ -4,7 +4,6 @@
 # Roda com: streamlit run app.py
 
 import io
-import os
 
 import pandas as pd
 import streamlit as st
@@ -14,7 +13,7 @@ from feedbackloop.pipeline import analisar
 
 # arquivo de exemplo que já vem no repo (dados sintéticos)
 CSV_EXEMPLO = "data/respostas-pesquisa-exemplo.csv"
-COLUNA_RESPOSTA = os.environ["COLUNA_RESPOSTA"]  # agora configuravel por ambiente
+COLUNA_RESPOSTA = "resposta"  # hardcoded; se a planilha do RH usar outro nome, quebra
 
 
 def carregar_respostas_do_csv(conteudo) -> list[str]:
