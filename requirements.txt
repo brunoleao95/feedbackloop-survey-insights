@@ -1,5 +1,9 @@
 streamlit==1.40.0
 openai==1.50.0
+# httpx e transitiva do openai. A 0.28 removeu o argumento 'proxies' que o
+# openai 1.50.0 ainda passa, quebrando a construcao do cliente em runtime.
+# Fixada aqui porque pin incompleto nao e build reproduzivel. Ver ADR-003.
+httpx==0.27.2
 pandas==2.2.3
 python-dotenv==1.0.1
 pytest==8.3.3
