@@ -1,0 +1,130 @@
+name: CI/CD
+
+# Fluxo:
+#   push em dev  -> testes -> deploy no ambiente dev  -> smoke tests
+#   push em main -> testes -> deploy no ambiente prod -> smoke tests
+#   pull request -> apenas testes, sem publicar
+#
+# O deploy e disparado por ESTE pipeline, e nao pela integracao nativa do Render
+# com o Git. Os dois servicos estao com auto-deploy desligado de proposito: uma
+# plataforma que observa o repositorio nao e CI/CD, e a diferenca importa aqui.
+#
+# O nome do GitHub Environment e escolhido pela branch, o que faz cada deploy
+# puxar os secrets do ambiente certo. Ver ADR-002.
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+# Um push novo cancela o anterior da mesma branch. Evita dois deploys
+# concorrentes no mesmo servico.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testes:
+    name: Testes unitarios
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configura Python
+        uses: actions/setup-python@v5
+        with:
+          # Le o .python-version do repositorio, a mesma fonte que o Render usa.
+          # Adicionado depois que producao resolveu 3.14 e o local usava 3.13.2.
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Instala dependencias
+        run: pip install -r requirements.txt
+
+      - name: Roda a suite offline
+        # Exclui tests/smoke: aqueles exigem um alvo publicado e rodam depois
+        # do deploy. Estes usam LLM mockado e nao tocam a rede.
+        run: pytest tests --ignore=tests/smoke -q
+
+  deploy:
+    name: Deploy
+    needs: testes
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+    steps:
+      - name: Dispara o deploy no Render
+        id: disparo
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+          resposta=$(curl -sS -X POST \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"clearCache":"do_not_clear"}' \
+            "https://api.render.com/v1/services/$SERVICE_ID/deploys")
+          deploy_id=$(echo "$resposta" | jq -r '.id')
+          if [ -z "$deploy_id" ] || [ "$deploy_id" = "null" ]; then
+            echo "Falha ao disparar o deploy. Resposta da API:"
+            echo "$resposta"
+            exit 1
+          fi
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Deploy $deploy_id disparado para o servico $SERVICE_ID"
+
+      - name: Aguarda o deploy concluir
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          DEPLOY_ID: ${{ steps.disparo.outputs.deploy_id }}
+        # Teto proprio: sem isso, um build travado seguraria o job ate o limite
+        # de 6 horas do runner.
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          inicio=$SECONDS
+          while true; do
+            status=$(curl -sS \
+              -H "Authorization: Bearer $RENDER_API_KEY" \
+              "https://api.render.com/v1/services/$SERVICE_ID/deploys/$DEPLOY_ID" \
+              | jq -r '.status')
+            case "$status" in
+              live)
+                echo "Deploy concluido em $((SECONDS - inicio))s"
+                exit 0
+                ;;
+              build_failed|update_failed|canceled|pre_deploy_failed)
+                echo "Deploy terminou como '$status'"
+                exit 1
+                ;;
+              *)
+                echo "  status: $status  ($((SECONDS - inicio))s)"
+                sleep 10
+                ;;
+            esac
+          done
+
+  smoke:
+    name: Smoke tests
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Instala dependencias
+        run: pip install -r requirements.txt
+
+      - name: Exercita o que esta publicado
+        env:
+          SMOKE_URL: ${{ vars.SMOKE_URL }}
+        run: pytest tests/smoke -v
