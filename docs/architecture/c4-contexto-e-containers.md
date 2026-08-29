@@ -1,4 +1,4 @@
-# Arquitetura: diagramas C4, níveis 1 e 2
+# Arquitetura: diagramas C4
 
 Estes diagramas descrevem o sistema **como ele está publicado hoje**, e não como
 eu gostaria que estivesse. Onde falta alguma coisa, a falta aparece desenhada.
@@ -48,56 +48,82 @@ real. Um diagrama que escondesse isso seria mais bonito e menos verdadeiro.
 
 ## Nível 2: Contêineres
 
-O que existe dentro do sistema, e como as partes conversam.
+As unidades que rodam separadamente e que precisam ser implantadas, escaladas ou
+substituídas de forma independente.
 
 ```mermaid
 flowchart TB
     analista["Analista de RH<br/>[Pessoa]"]
 
     subgraph render["Render - regiao Oregon"]
-        app["Aplicacao Survey Insights<br/>[Container: Python 3.13.2 + Streamlit 1.40]<br/><br/>Processo unico, uma instancia.<br/>Serve a interface e executa a analise<br/>em lote no mesmo processo."]
-
-        subgraph interno["Dentro do processo"]
-            ui["app.py<br/>[Modulo: Streamlit]<br/><br/>Entrada de dados, disparo da analise<br/>e exibicao do resultado."]
-            pipeline["feedbackloop/pipeline.py<br/>[Modulo: Python puro]<br/><br/>Orquestra a analise. Funcoes puras de<br/>parsing e agregacao, testaveis offline."]
-            adaptador["feedbackloop/llm.py<br/>[Modulo: adaptador]<br/><br/>Unico ponto que conhece o provedor.<br/>Expoe apenas .completar."]
-        end
-
-        csv[("data/respostas-<br/>pesquisa-exemplo.csv<br/>[Arquivo no repositorio]<br/><br/>36 respostas sinteticas.<br/>Unico dado que acompanha o deploy.")]
+        app["Aplicacao Survey Insights<br/>[Container: Python 3.13.2 + Streamlit 1.40]<br/><br/>Processo unico, uma instancia.<br/>Serve a interface e executa a analise<br/>em lote no mesmo processo.<br/>Nao mantem estado entre sessoes."]
     end
 
-    llm["API do provedor de LLM<br/>[Sistema externo]<br/><br/>Modelo gpt-5.4-mini.<br/>Uma chamada por resposta,<br/>mais uma para o resumo."]
+    llm["API do provedor de LLM<br/>[Container externo]<br/><br/>Modelo gpt-5.4-mini.<br/>Uma chamada por resposta,<br/>mais uma para o resumo."]
 
-    analista -->|"HTTPS"| app
-    ui -->|"Le as respostas"| csv
-    ui -->|"Chama analisar com a lista de respostas"| pipeline
-    pipeline -->|"Chama .completar por resposta<br/>e uma vez para o resumo"| adaptador
-    adaptador -->|"HTTPS, chat completions<br/>Chave lida de OPENAI_API_KEY"| llm
-    pipeline -->|"Devolve ResultadoAnalise<br/>em memoria"| ui
+    analista -->|"HTTPS, porta 443"| app
+    app -->|"HTTPS, chat completions<br/>Chave lida de OPENAI_API_KEY"| llm
 
     style llm stroke-dasharray: 5 5
-    style interno fill:none,stroke-dasharray: 3 3
 ```
 
-### O que este nível revela
+### Por que este diagrama é tão pequeno
 
-**Não existe banco de dados, e isso não é omissão do desenho.** O sistema não
-persiste nada: o resultado vive no estado da sessão do Streamlit e desaparece
-quando a aba fecha. Não há como comparar a pesquisa deste trimestre com a do
-anterior, que é a promessa central de um produto de people analytics, e não há
-trilha de auditoria do que foi enviado ao provedor. É a lacuna 2 da auditoria.
+Ele tem um contêiner só, e isso é o retrato fiel do sistema, não falta de
+detalhe. Não existe banco de dados, não existe fila, não existe serviço de
+fundo. Tudo vive dentro de um único processo Python.
 
-**Um processo, uma instância, execução síncrona.** O log do Render mostra
-`WEB_CONCURRENCY=1`. A análise roda no mesmo processo que serve a interface, uma
-resposta por vez. Com as 36 respostas de exemplo funciona; com as milhares que o
-briefing menciona, uma análise longa bloqueia o aplicativo para qualquer outro
-visitante. É a consequência negativa que o [ADR-001](../adr/adr-001-adocao-da-stack-b.md)
-assume explicitamente.
+As consequências disso são concretas e estão documentadas nos outros artefatos:
+o resultado da análise não sobrevive ao fechamento da aba, não há trilha de
+auditoria do que foi enviado ao provedor, e o log do Render mostra
+`WEB_CONCURRENCY=1`, então uma análise longa bloqueia o aplicativo para qualquer
+outro visitante.
+
+Um protótipo que nunca foi separado em contêineres é exatamente o que se espera
+de código que nasceu para rodar na máquina de uma pessoa. Separar é trabalho das
+etapas seguintes, e o desenho de hoje precisa mostrar o ponto de partida.
+
+---
+
+## Nível 3 (complementar): componentes dentro do contêiner
+
+Fora do que a entrega pede, mas é aqui que se vê a melhor decisão da herança.
+
+```mermaid
+flowchart TB
+    analista2["Analista de RH<br/>[Pessoa]"]
+
+    subgraph appc["Aplicacao Survey Insights [Container]"]
+        ui["app.py<br/>[Componente: Streamlit]<br/><br/>Entrada de dados, disparo da<br/>analise e exibicao do resultado."]
+        pipeline["feedbackloop/pipeline.py<br/>[Componente: Python puro]<br/><br/>Orquestra a analise. Funcoes puras<br/>de parsing e agregacao,<br/>testaveis offline."]
+        adaptador["feedbackloop/llm.py<br/>[Componente: adaptador]<br/><br/>Unico ponto do codigo que conhece<br/>o provedor. Expoe apenas .completar."]
+        csv[("data/respostas-pesquisa-exemplo.csv<br/>[Arquivo empacotado no deploy]<br/><br/>36 respostas sinteticas.")]
+    end
+
+    llm2["API do provedor de LLM<br/>[Container externo]"]
+
+    analista2 -->|"HTTPS"| ui
+    ui -->|"Le as respostas de exemplo"| csv
+    ui -->|"Chama analisar<br/>com a lista de respostas"| pipeline
+    pipeline -->|"Chama .completar por resposta<br/>e uma vez para o resumo"| adaptador
+    pipeline -->|"Devolve ResultadoAnalise<br/>em memoria"| ui
+    adaptador -->|"HTTPS"| llm2
+
+    style llm2 stroke-dasharray: 5 5
+```
 
 **O adaptador é a melhor herança do protótipo.** Todo o resto do código conhece
-apenas o método `.completar`. É isso que torna os testes possíveis sem chamar a
-API, e é o que tornaria uma troca de provedor uma mudança localizada em um
-arquivo em vez de uma reescrita.
+apenas o método `.completar`. É isso que torna os 7 testes offline possíveis sem
+chamar a API, e é o que tornaria uma troca de provedor uma mudança localizada em
+um arquivo em vez de uma reescrita. O
+[ADR-001](../adr/adr-001-adocao-da-stack-b.md) apoia a decisão de manter a stack
+justamente nessa separação.
+
+**A fronteira de PII fica visível aqui.** O texto integral de cada resposta
+percorre `app.py` para `pipeline.py` para `llm.py` e sai para fora do Brasil, sem
+passar por nenhuma etapa de anonimização. Não existe componente entre o pipeline
+e o adaptador, e é exatamente esse componente ausente que a lacuna 1 da
+[auditoria](../auditoria-prototipo.md) descreve.
 
 ---
 
