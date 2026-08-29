@@ -80,4 +80,77 @@ Pontuação final de cada opção: soma de (peso x nota). Máximo teórico: 500.
 
 ## Notas
 
-A preencher no próximo commit.
+Aplicadas em 29/08/2026, depois que os pesos já estavam commitados.
+
+### Matriz 1: escolha de stack
+
+| Critério | Peso | Stack A (n8n) | Stack B (Streamlit) | Stack C (Make) |
+|---|---|---|---|---|
+| 1. Custo <= US$ 120 | 15 | 4 | 5 | 3 |
+| 2. Esforço de migração | 15 | 2 | 5 | 1 |
+| 3. Isolamento dev/prod | 20 | 4 | 5 | 2 |
+| 4. Deploy por Actions <5min | 25 | 4 | 5 | 2 |
+| 5. Caminho para a fase final | 15 | 2 | 4 | 1 |
+| 6. Meu domínio | 10 | 3 | 4 | 3 |
+| **Total** | | **330** | **475** | **195** |
+
+**Resultado: stack B, com 475 de 500.**
+
+O critério que mais separa é o esforço de migração. O protótipo herdado são 918
+linhas de Python organizadas em um pacote (`feedbackloop/`) com 7 testes
+passando offline. Migrar para a stack A ou C significa recodar essa lógica como
+nós de workflow ou como cenários low-code, descartando a suíte de testes junto.
+É exatamente a reescrita que a regra do projeto proíbe.
+
+Ressalva honesta: **nenhuma das três stacks evita a migração de interface na
+fase final** do projeto, que exige sair de uma tela de protótipo para uma
+aplicação de verdade. A stack B recebeu 4 e não 5 nesse critério por isso. O que
+ela oferece é que a lógica de domínio no pacote `feedbackloop/` é reaproveitável
+integralmente: vira uma API, e só a camada de apresentação é substituída.
+
+### Matriz 2: onde hospedar
+
+| Critério | Peso | Streamlit Cloud | HF Spaces | Render | Vercel |
+|---|---|---|---|---|---|
+| 1. Custo <= US$ 120 | 15 | 5 | 5 | 4 | 4 |
+| 2. Esforço de migração | 15 | 5 | 4 | 4 | 1 |
+| 3. Isolamento dev/prod | 20 | 4 | 5 | 5 | 5 |
+| 4. Deploy por Actions <5min | 25 | 2 | 5 | 5 | 5 |
+| 5. Caminho para a fase final | 15 | 2 | 4 | 5 | 3 |
+| 6. Meu domínio | 10 | 2 | 2 | 5 | 5 |
+| **Total** | | **330** | **440** | **470** | **395** |
+
+**Resultado: Render, com 470 de 500.**
+
+Usei deliberadamente os mesmos seis critérios e os mesmos pesos da matriz 1.
+Inventar um segundo conjunto de pesos para esta decisão reintroduziria
+exatamente o viés que a primeira matriz existe para evitar.
+
+Três observações que valem mais que o número final:
+
+**Streamlit Cloud tira 2 no critério de maior peso.** É a opção mais cômoda e a
+mais óbvia para quem herdou um app Streamlit, mas ela faz auto-deploy pela
+própria integração com o Git, e não pelo pipeline. Dá para manter um GitHub
+Actions rodando os testes, porém o deploy não é disparado por ele. A exigência
+desta fase é que o push na branch principal dispare o deploy pelo CI/CD, e não
+que a plataforma observe o repositório por conta própria. São coisas diferentes.
+
+**Vercel tira 1 em esforço de migração.** Streamlit não roda bem em ambiente
+serverless, então adotar Vercel agora significaria reescrever a interface antes
+mesmo de publicar a primeira URL. Vercel volta a ser candidato forte na fase
+final, quando a interface for reconstruída.
+
+**A decisão foi tomada por um empate desfeito no critério 6.** Antes de pontuar
+meu próprio domínio, HF Spaces e Render estavam empatados em 450. Registro isso
+porque o critério de familiaridade é o que mais corre risco de virar viés de
+conforto, e aqui ele foi decisivo. Testei a robustez: mesmo que HF Spaces
+recebesse 4 em domínio em vez de 2, chegaria a 460 e ainda perderia. A escolha
+não depende dessa nota.
+
+### Consequências que já vejo
+
+O tier gratuito do Render hiberna por inatividade, o que produz cold start e
+conflita com o requisito de URL estável durante a avaliação. O plano pago mais
+barato resolve isso e cabe com folga nos US$ 120/mês do briefing, já que o custo
+dominante do projeto é o de LLM, não o de hospedagem. Preciso confirmar os
+valores e a política de hibernação vigentes antes de fechar o ADR-002.
