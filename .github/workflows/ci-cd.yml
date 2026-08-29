@@ -62,19 +62,33 @@ jobs:
           SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
         run: |
           set -euo pipefail
-          resposta=$(curl -sS -X POST \
-            -H "Authorization: Bearer $RENDER_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"clearCache":"do_not_clear"}' \
-            "https://api.render.com/v1/services/$SERVICE_ID/deploys")
-          deploy_id=$(echo "$resposta" | jq -r '.id')
-          if [ -z "$deploy_id" ] || [ "$deploy_id" = "null" ]; then
-            echo "Falha ao disparar o deploy. Resposta da API:"
-            echo "$resposta"
+
+          resposta=$(curl -sS -X POST             -H "Authorization: Bearer $RENDER_API_KEY"             -H "Content-Type: application/json"             -d '{"clearCache":"do_not_clear"}'             "https://api.render.com/v1/services/$SERVICE_ID/deploys")
+
+          deploy_id=$(echo "$resposta" | jq -r '.id // empty')
+
+          # A API nem sempre devolve o JSON do deploy. Quando ja existe um
+          # deploy em andamento no servico, ela aceita, enfileira o novo e
+          # responde com corpo vazio. Tratar isso como falha derruba o pipeline
+          # por um deploy que na verdade foi criado, e foi o que aconteceu na
+          # primeira publicacao em producao.
+          if [ -z "$deploy_id" ]; then
+            echo "Resposta sem id. Pode ser enfileiramento; resolvendo pelo commit $GITHUB_SHA"
+            for tentativa in $(seq 1 24); do
+              deploy_id=$(curl -sS                 -H "Authorization: Bearer $RENDER_API_KEY"                 "https://api.render.com/v1/services/$SERVICE_ID/deploys?limit=10"                 | jq -r --arg sha "$GITHUB_SHA"                     '[.[].deploy | select(.commit.id == $sha)] | first | .id // empty')
+              [ -n "$deploy_id" ] && break
+              sleep 5
+            done
+          fi
+
+          if [ -z "$deploy_id" ]; then
+            echo "Nenhum deploy para o commit $GITHUB_SHA apareceu. Resposta do POST:"
+            echo "${resposta:-(vazia)}"
             exit 1
           fi
+
           echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
-          echo "Deploy $deploy_id disparado para o servico $SERVICE_ID"
+          echo "Deploy $deploy_id ativo para o commit $GITHUB_SHA"
 
       - name: Aguarda o deploy concluir
         env:
