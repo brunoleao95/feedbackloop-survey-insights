@@ -5,6 +5,30 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ## [Não publicado]
 
+## [1.0.1] - 2026-08-29
+
+Endurecimento após o incidente de indisponibilidade do mesmo dia. Nenhuma
+mudança de comportamento para quem usa a aplicação: o que muda é a capacidade de
+detectar defeito antes do usuário.
+
+### Adicionado
+
+- Quarto smoke test, que importa o módulo da interface e executa todo o código de
+  nível superior. Verificado nos dois sentidos: falha com o defeito
+  reintroduzido, passa sem ele.
+- [Post-mortem do incidente](docs/post-mortem-2026-08-29.md), com linha do tempo,
+  evidência de execução do rollback e a análise de por que todas as verificações
+  automatizadas passaram enquanto a aplicação estava fora.
+- README reescrito como entregável: problema, solução, como rodar, arquitetura,
+  ambientes, testes e limitações conhecidas.
+
+### Corrigido
+
+- Revertida a leitura de `COLUNA_RESPOSTA` no nível de módulo de `app.py`. A
+  variável existia na máquina de desenvolvimento e não nas plataformas, o que
+  deixou produção respondendo apenas com `KeyError` por 4 minutos e 47 segundos.
+  A dívida original que a mudança tentava resolver segue aberta.
+
 ## [1.0.0] - 2026-08-29
 
 Primeira versão do sistema publicada e operável. O protótipo herdado deixa de
@@ -86,5 +110,6 @@ Registrado aqui porque omitir seria pior do que admitir. Ver
 - Streamlit + um modelo GPT pequeno da OpenAI
 - Classificação de tema + sentimento por resposta e resumo executivo (Rafael)
 
-[Não publicado]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.0.0...HEAD
+[Não publicado]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/brunoleao95/feedbackloop-survey-insights/releases/tag/v1.0.0
