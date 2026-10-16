@@ -15,6 +15,8 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
+from feedbackloop.pii import sanitizar
+
 # Os três rótulos de sentimento que a gente aceita. Qualquer coisa fora disso
 # o parser joga pra "neutro" (decisão preguiçosa, mas evita quebrar o pipeline).
 SENTIMENTOS_VALIDOS = ("positivo", "neutro", "negativo")
@@ -154,8 +156,9 @@ def montar_resumo(
 def classificar_resposta(cliente, resposta: str) -> dict:
     """Classifica UMA resposta: devolve {"tema", "sentimento"}.
 
-    ATENÇÃO LGPD: a `resposta` vai crua pro prompt, podendo conter nomes de
-    pessoas e queixas identificáveis. Não tem anonimização aqui. (planted)
+    Espera receber texto JÁ SANITIZADO. Quem garante isso é `analisar`, que é o
+    único caminho do sistema até esta função. Chamar diretamente com texto cru
+    envia PII para fora do Brasil. Ver feedbackloop/pii.py.
     """
     bruto = cliente.completar(
         system=SYSTEM_CLASSIFICACAO,
@@ -188,6 +191,9 @@ class ResultadoAnalise:
     top_temas: list[tuple[str, int]] = field(default_factory=list)
     contagem_sentimentos: dict = field(default_factory=dict)
     resumo: str = ""
+    # O que foi mascarado antes do envio, por tipo. Fica visível para o
+    # usuário em vez de o sistema pedir confiança cega.
+    pii_mascarada: dict = field(default_factory=dict)
 
 
 def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
@@ -203,9 +209,17 @@ def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
     respostas_limpas = [r.strip() for r in respostas if r and r.strip()]
 
     classificacoes = []
+    pii_total: dict = {}
     for resp in respostas_limpas:
-        c = classificar_resposta(cliente, resp)
+        # Fronteira LGPD: nada sai deste processo sem passar por aqui. O texto
+        # original fica só em memória, para exibição a quem enviou a planilha.
+        sanitizada = sanitizar(resp)
+        for tipo, n in sanitizada.contagem.items():
+            pii_total[tipo] = pii_total.get(tipo, 0) + n
+
+        c = classificar_resposta(cliente, sanitizada.texto)
         c["resposta"] = resp
+        c["texto_enviado"] = sanitizada.texto
         classificacoes.append(c)
 
     top_temas = contar_temas([c["tema"] for c in classificacoes])[:top_n]
@@ -220,4 +234,5 @@ def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
         top_temas=top_temas,
         contagem_sentimentos=contagem,
         resumo=resumo,
+        pii_mascarada=pii_total,
     )

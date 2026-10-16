@@ -7,9 +7,17 @@ import io
 
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 
 from feedbackloop.llm import ClienteLLM
 from feedbackloop.pipeline import analisar
+
+# Carrega o .env local, se existir. Em produção as variáveis vêm da plataforma e
+# o arquivo não existe, então isto não faz nada lá. O python-dotenv estava no
+# requirements.txt desde o protótipo herdado, mas nunca era chamado: criar um
+# .env não tinha efeito nenhum, e a documentação apontava para um mecanismo que
+# não existia.
+load_dotenv()
 
 # arquivo de exemplo que já vem no repo (dados sintéticos)
 CSV_EXEMPLO = "data/respostas-pesquisa-exemplo.csv"
@@ -36,11 +44,11 @@ def main():
         "A gente agrupa por tema, marca o sentimento e gera um resumo executivo."
     )
 
-    # AVISO LGPD que devia ser bloqueante, mas por enquanto é só um texto. (planted)
-    st.warning(
-        "⚠️ As respostas vão para o provedor de IA **sem anonimização**. "
-        "Evite subir textos com nomes de pessoas até resolvermos isso. "
-        "(ver README → Dívida técnica herdada)"
+    st.info(
+        "🔒 Nomes de pessoas, e-mails, CPFs e telefones são mascarados **antes** "
+        "de qualquer envio ao provedor de IA, que processa fora do Brasil. "
+        "A sanitização cobre o padrão mais comum, não todos os casos: "
+        "não carregue dado real sem revisão prévia (ver README, seção LGPD)."
     )
 
     st.markdown("### 1) Entrada de dados")
@@ -90,6 +98,14 @@ def main():
             resultado = analisar(cliente, respostas)
 
         st.markdown("### 3) Resultado")
+
+        mascarados = sum(resultado.pii_mascarada.values())
+        if mascarados:
+            partes = ", ".join(f"{n} {tipo}" for tipo, n in sorted(resultado.pii_mascarada.items()))
+            st.success(f"🔒 {mascarados} dado(s) pessoal(is) mascarado(s) antes do envio: {partes}.")
+        else:
+            st.caption("Nenhum dado pessoal detectado nas respostas.")
+
         st.markdown(resultado.resumo)
 
         st.markdown("#### Detalhe por resposta")
@@ -97,6 +113,15 @@ def main():
             ["resposta", "tema", "sentimento"]
         ]
         st.dataframe(tabela, use_container_width=True)
+
+        # Mostra exatamente o que saiu do processo. Em vez de pedir confiança,
+        # deixa conferir: é o texto que o provedor recebeu, palavra por palavra.
+        enviadas = [c for c in resultado.classificacoes if c["texto_enviado"] != c["resposta"]]
+        with st.expander(f"Ver o que foi enviado ao provedor ({len(enviadas)} resposta(s) alterada(s))"):
+            for c in enviadas:
+                st.markdown(f"**Original:** {c['resposta']}")
+                st.markdown(f"**Enviado:** {c['texto_enviado']}")
+                st.divider()
 
         # TODO: nada disso é persistido. Fechou a aba, perdeu o resultado. (Rafael)
         st.caption(
