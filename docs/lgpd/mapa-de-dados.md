@@ -43,6 +43,7 @@ Marcos muda as prioridades toda semana" sem ter participado de nada.
 | 3 | **Envio ao provedor de LLM** | Texto **já sanitizado**: nomes, e-mail, CPF e telefone substituídos por marcadores | Mesma base do ponto 1, mais Art. 33 para a transferência | Ver a seção de transferência internacional abaixo |
 | 4 | **Exibição do resultado** | Respostas originais, tema, sentimento e resumo, na tela do analista | Mesma base do ponto 1 | O analista é quem enviou a planilha. Não há compartilhamento com terceiros |
 | 5 | **Logs de acesso da plataforma** | IP, agente do navegador e horário de quem acessa o app (o analista de RH, não o respondente) | Cumprimento de obrigação legal, Art. 7º, II, combinado com o Marco Civil da Internet, Art. 15 | Provedor de aplicação com fins econômicos é obrigado a guardar registro de acesso |
+| 6 | **Telemetria de observabilidade** (Langfuse) | Prompt sanitizado de cada chamada, resposta do modelo, tokens, latência e contagens agregadas. **Nunca** a resposta original | Legítimo interesse do operador, Art. 7º, IX, mais Art. 33 para a transferência | Sem telemetria não há como detectar falha silenciosa, custo fora do padrão ou queda de qualidade. Ver a seção de observabilidade abaixo |
 
 ### Minimização, que vem antes da base legal
 
@@ -89,6 +90,34 @@ consultada em 16/10/2026:
 **Mitigação que já está em produção:** só texto sanitizado cruza a fronteira. O
 que a transferência leva é "o gerente [PESSOA] muda as prioridades toda semana",
 e não o nome de quem foi citado.
+
+## Observabilidade: um segundo destino internacional
+
+Instrumentar o sistema criou um segundo lugar para onde dado sai do processo: o
+Langfuse, hospedado na **União Europeia** (`cloud.langfuse.com`, sobre AWS). É uma
+segunda transferência internacional, com a mesma base do Art. 33, II, "b", e com
+o mesmo pré-requisito de cláusulas-padrão contratuais.
+
+O que vale para o provedor de LLM vale para ele: **nada identificável sai**. Três
+camadas, em `feedbackloop/observabilidade.py`:
+
+**1. Captura desligada onde há texto cru.** A função `analisar`, único ponto que
+recebe as respostas originais, e a etapa de sanitização não registram entrada nem
+saída. Elas exportam só contagens: quantas respostas, quantas alteradas, quantos
+dados mascarados por tipo. O único componente que registra o prompt é o adaptador
+do LLM, e ele já recebe o texto sanitizado.
+
+**2. Máscara no próprio cliente do Langfuse.** Tudo o que é exportado passa pela
+mesma sanitização de PII antes de sair. Se alguém um dia instrumentar a função
+errada, o nome ainda é mascarado no caminho.
+
+**3. Máscara de credenciais.** Funções que recebem o objeto `cliente` carregam,
+dentro dele, a chave da OpenAI. A captura de entrada está desligada nelas, e a
+máscara também substitui qualquer padrão de chave de API por `[SEGREDO]`. A
+sanitização de PII sozinha não pegaria isso: ela procura nomes, não credenciais.
+
+As três camadas têm testes em `tests/test_observabilidade.py`, inclusive um que
+simula um objeto cliente serializado por engano e confirma que a chave não sai.
 
 ## Riscos que sobram
 

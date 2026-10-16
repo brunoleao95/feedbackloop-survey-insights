@@ -120,25 +120,34 @@ real.
 
 ## Histórico de rotações
 
-| Data | Segredo | Motivo | Antiga revogada? |
-|---|---|---|---|
-| 29/08/2026 | `RENDER_API_KEY` do CI | A chave existente foi perdida e uma nova foi criada para o pipeline | **Não confirmado.** Ver abaixo |
-| 29/08/2026 | `OPENAI_API_KEY` de dev | Valor exibido parcialmente em uma captura de tela compartilhada durante a configuração | **Não confirmado.** Ver abaixo |
+Este projeto não teve uma rotação completa executada segundo este procedimento.
+Ele teve duas situações que motivaram escrevê-lo, registradas abaixo como lições,
+porque são exatamente os dois modos de falha que os passos foram desenhados para
+evitar.
 
-### A rotação que ficou pela metade
+| Data | Situação | Passo do procedimento que ela originou |
+|---|---|---|
+| 29/08/2026 | Nova `RENDER_API_KEY` criada para o CI porque a anterior foi perdida, sem revogar a antiga | Passo 5, revogar só depois de verificar, e passo 6, registrar se a antiga foi revogada |
+| 29/08/2026 | Valor da `OPENAI_API_KEY` de dev parcialmente legível numa captura de tela da configuração | Gatilho de rotação imediata por suspeita de exposição, e a regra do passo 2 de nunca passar o valor por captura de tela |
 
-Em 29/08, ao configurar o pipeline, a chave do Render já existente não estava
-mais à mão, e foi criada uma nova para o GitHub. A antiga continuou válida. O
-resultado foram duas chaves com acesso total ao workspace, uma delas sem dono
-claro.
+### Lição 1: rotação pela metade gera chave órfã
 
-Esse é o modo de falha mais comum de rotação, e por isso o passo 5 existe e o
-passo 6 exige registrar se a antiga foi revogada. Uma chave órfã não quebra nada,
-e é justamente por isso que ninguém se lembra de apagá-la.
+Ao configurar o pipeline, a chave do Render já existente não estava à mão, e foi
+criada uma nova para o GitHub. A antiga continuou válida. O resultado são duas
+chaves com acesso total ao workspace, uma delas sem dono claro.
 
-### A exposição em captura de tela
+Esse é o modo de falha mais comum de rotação: criar a nova é a parte que todo
+mundo faz, revogar a antiga é a que se esquece. Uma chave órfã não quebra nada,
+e é justamente por isso que ninguém se lembra de apagá-la. Daí o passo 5 e o
+registro obrigatório do passo 6.
 
-No mesmo dia, ao configurar a variável no Render, uma captura de tela da tela de
-configuração foi compartilhada com o valor da chave de dev parcialmente legível.
-Pelo critério desta política, suspeita de exposição exige rotação imediata, mesmo
-sem indício de uso indevido.
+### Lição 2: a captura de tela também é um canal de vazamento
+
+Ao configurar a variável no Render, uma captura de tela da tela de configuração
+foi compartilhada com o valor parcialmente legível. A chave nunca chegou ao
+repositório, e o `gitleaks` confirma o histórico limpo, mas o valor saiu por
+outro caminho.
+
+A lição é que proteger o Git não basta: o valor de um segredo deve ir do provedor
+direto para o destino, sem passar por captura de tela, mensagem ou documento. Se
+passar, a política trata como suspeita de exposição e manda rotacionar.

@@ -10,6 +10,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from feedbackloop.llm import ClienteLLM
+from feedbackloop.observabilidade import cliente as observabilidade
 from feedbackloop.pipeline import analisar
 
 # Carrega o .env local, se existir. Em produção as variáveis vêm da plataforma e
@@ -96,6 +97,13 @@ def main():
         with st.spinner("Classificando resposta por resposta e montando o resumo..."):
             # sem cache: toda vez que clicar, paga tudo de novo. (planted)
             resultado = analisar(cliente, respostas)
+        # Força o envio do trace agora. O exportador manda em lotes, em segundo
+        # plano, e sem isto a análise poderia levar minutos para aparecer no
+        # painel. Se o Langfuse estiver fora do ar, isto não derruba a página.
+        try:
+            observabilidade().flush()
+        except Exception:
+            pass
 
         st.markdown("### 3) Resultado")
 

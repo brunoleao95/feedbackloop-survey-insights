@@ -24,6 +24,7 @@ controle direto deste código. A tabela abaixo diz qual é qual.
 | 2 | Texto sanitizado das respostas | Logs de monitoramento de abuso do provedor de LLM | **Até 30 dias** | Expiração automática pelo provedor | Provedor, por contrato |
 | 3 | Registro de acesso (IP, horário, navegador do analista) | Logs do Render | **7 dias** | Expiração automática pela plataforma | Plataforma |
 | 4 | Logs de execução do pipeline | GitHub Actions | 90 dias | Expiração automática pelo GitHub | GitHub |
+| 5 | Telemetria: prompt sanitizado, resposta do modelo, tokens, latência | Langfuse, União Europeia | **30 dias de acesso** | Fora do nosso controle no plano gratuito. Ver abaixo | Langfuse |
 
 ### 1. Respostas e resultado: retenção zero, por construção
 
@@ -79,6 +80,18 @@ O GitHub Actions retém os logs de execução por 90 dias por padrão. Eles cont
 saída de testes e dos passos de deploy, e **não contêm dado pessoal**: os testes
 offline usam respostas sintéticas, os smoke tests verificam apenas que a
 aplicação responde, e os secrets aparecem mascarados como `***`.
+
+### 5. Telemetria no Langfuse
+
+No plano Hobby os traces ficam acessíveis por 30 dias. A configuração de
+retenção, que permitiria definir quando o dado é apagado, só existe nos planos
+pagos. Na prática, isso significa que o prazo de acesso é conhecido, mas o
+momento da exclusão não é controlável por nós.
+
+**Por que isso é aceitável aqui:** o que chega ao Langfuse passou por duas
+camadas de mascaramento e não contém a resposta original. O mapa de dados
+descreve as camadas. Se o sistema passar a operar com dado real, contratar o
+plano com retenção configurável vira requisito.
 
 ## Pedido de eliminação
 

@@ -7,3 +7,12 @@ httpx==0.27.2
 pandas==2.2.3
 python-dotenv==1.0.1
 pytest==8.3.3
+# Observabilidade. Ver ADR-003.
+langfuse==5.0.2
+# Transitivas fixadas pela mesma lição do httpx (ver post-mortem 29/08): o
+# Langfuse puxou protobuf 7.x, e o Streamlit 1.40 exige protobuf<6. O pip
+# instalou com só um aviso, e o build teria passado.
+protobuf==5.29.6
+opentelemetry-api==1.45.1
+opentelemetry-sdk==1.45.1
+opentelemetry-exporter-otlp-proto-http==1.45.1
