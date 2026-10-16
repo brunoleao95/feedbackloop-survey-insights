@@ -72,3 +72,18 @@ def cliente() -> Langfuse:
     """Atalho para o cliente já iniciado."""
     iniciar()
     return get_client()
+
+
+# O cliente com a máscara é criado AQUI, na importação do módulo, e não na
+# primeira chamada ao LLM.
+#
+# Isso corrige um defeito encontrado em 16/10: o `@observe` de `analisar` roda
+# antes de qualquer chamada a `iniciar()`, e o SDK cria um cliente padrão, sem
+# máscara, para atendê-lo. A segunda e a terceira camadas de proteção ficavam
+# desligadas em silêncio. Nenhum dado pessoal vazou porque a primeira camada,
+# captura desligada sobre texto já sanitizado, segurou sozinha. Ver o teste
+# tests/test_observabilidade.py::test_cliente_com_mascara_ativo_na_importacao.
+#
+# Todo módulo que usa `observe` o importa daqui, então importar este arquivo
+# acontece antes de qualquer função decorada poder executar.
+iniciar()
