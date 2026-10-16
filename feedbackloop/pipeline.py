@@ -15,6 +15,8 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
+from feedbackloop.observabilidade import cliente as observabilidade
+from feedbackloop.observabilidade import observe
 from feedbackloop.pii import sanitizar
 
 # Os três rótulos de sentimento que a gente aceita. Qualquer coisa fora disso
@@ -153,7 +155,11 @@ def montar_resumo(
 # Funções que CHAMAM o LLM (recebem um cliente com .completar(system, user))
 # ---------------------------------------------------------------------------
 
-def classificar_resposta(cliente, resposta: str) -> dict:
+# Captura de entrada desligada: o argumento `cliente` contém o cliente da OpenAI,
+# com a chave de API, e seria serializado. A entrada útil, o texto sanitizado,
+# já fica registrada na chamada ao LLM que está dentro deste span.
+@observe(name="classificar-resposta", capture_input=False)
+def _classificar(cliente, resposta: str) -> tuple[dict, bool]:
     """Classifica UMA resposta: devolve {"tema", "sentimento"}.
 
     Espera receber texto JÁ SANITIZADO. Quem garante isso é `analisar`, que é o
@@ -165,9 +171,35 @@ def classificar_resposta(cliente, resposta: str) -> dict:
         user=f"Resposta da pesquisa:\n\"\"\"\n{resposta}\n\"\"\"",
         temperatura=0.0,
     )
-    return parse_classificacao(bruto)
+    resultado = parse_classificacao(bruto)
+
+    # Erro silencioso tornado visível. Os parsers caem para "Não classificado"
+    # e "neutro" sem levantar exceção, e era impossível distinguir falha do
+    # modelo de resultado legítimo. Agora a falha fica marcada no trace.
+    formato_ok = resultado["tema"] != "Não classificado"
+    sentimento_reconhecido = any(
+        chave in (bruto or "").lower() for chave in ("positiv", "negativ", "neutr")
+    )
+    ok = formato_ok and sentimento_reconhecido
+    if not ok:
+        observabilidade().update_current_span(
+            level="WARNING",
+            status_message="saida do modelo fora do formato esperado; caiu no valor padrao",
+            metadata={"saida_bruta": (bruto or "")[:300]},
+        )
+    return resultado, ok
 
 
+def classificar_resposta(cliente, resposta: str) -> dict:
+    """Contrato público: devolve só {"tema", "sentimento"}, como no protótipo.
+
+    O indicador de formato fica em `_classificar`, usado por `analisar`, para
+    não mudar o formato de retorno do qual outro código pode depender.
+    """
+    return _classificar(cliente, resposta)[0]
+
+
+@observe(name="gerar-resumo", capture_input=False)
 def gerar_resumo_llm(
     cliente,
     top_temas: list[tuple[str, int]],
@@ -180,6 +212,10 @@ def gerar_resumo_llm(
         f"Principais temas (tema: contagem):\n{temas_fmt}\n\n"
         f"Distribuição de sentimento: {sent_fmt}\n\n"
         "Gere o resumo executivo e as ações recomendadas."
+    )
+    # Só agregados: temas e contagens. Nenhuma resposta individual entra aqui.
+    observabilidade().update_current_span(
+        input={"top_temas": top_temas, "sentimentos": contagem_sentimentos},
     )
     return cliente.completar(system=SYSTEM_RESUMO, user=user, temperatura=0.3)
 
@@ -196,6 +232,10 @@ class ResultadoAnalise:
     pii_mascarada: dict = field(default_factory=dict)
 
 
+# Entrada e saída desligadas: este é o único ponto do sistema que recebe as
+# respostas cruas, com nomes, e a saída contém o texto original para exibição.
+# O que vai para o trace é só o que está em `metadata`, no fim da função.
+@observe(name="analise-pesquisa", capture_input=False, capture_output=False)
 def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
     """Pipeline ponta a ponta.
 
@@ -208,18 +248,35 @@ def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
     """
     respostas_limpas = [r.strip() for r in respostas if r and r.strip()]
 
-    classificacoes = []
+    # Fronteira LGPD: nada sai deste processo sem passar por aqui. Toda a
+    # sanitização acontece antes da primeira chamada ao provedor, o que deixa a
+    # ordem visível na linha do tempo do trace. O span registra só contagens.
     pii_total: dict = {}
-    for resp in respostas_limpas:
-        # Fronteira LGPD: nada sai deste processo sem passar por aqui. O texto
-        # original fica só em memória, para exibição a quem enviou a planilha.
-        sanitizada = sanitizar(resp)
-        for tipo, n in sanitizada.contagem.items():
-            pii_total[tipo] = pii_total.get(tipo, 0) + n
+    sanitizadas = []
+    with observabilidade().start_as_current_observation(
+        as_type="span", name="sanitizar-pii"
+    ) as span:
+        for resp in respostas_limpas:
+            s = sanitizar(resp)
+            for tipo, n in s.contagem.items():
+                pii_total[tipo] = pii_total.get(tipo, 0) + n
+            sanitizadas.append(s)
+        span.update(
+            metadata={
+                "respostas": len(respostas_limpas),
+                "respostas_alteradas": sum(1 for s in sanitizadas if s.total),
+                "pii_mascarada": pii_total,
+            }
+        )
 
-        c = classificar_resposta(cliente, sanitizada.texto)
+    classificacoes = []
+    for resp, s in zip(respostas_limpas, sanitizadas):
+        c, ok = _classificar(cliente, s.texto)
+        c["formato_ok"] = ok
+        # O texto original fica só em memória, para exibição a quem enviou a
+        # planilha. Ele não é passado a nenhuma função observada.
         c["resposta"] = resp
-        c["texto_enviado"] = sanitizada.texto
+        c["texto_enviado"] = s.texto
         classificacoes.append(c)
 
     top_temas = contar_temas([c["tema"] for c in classificacoes])[:top_n]
@@ -227,6 +284,25 @@ def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
 
     texto = gerar_resumo_llm(cliente, top_temas, contagem)
     resumo = montar_resumo(top_temas, contagem, texto, len(respostas_limpas))
+
+    # Métricas de qualidade da análise, usadas no dashboard. São indicadores
+    # indiretos: o sistema não tem gabarito para saber se um tema está certo,
+    # mas sabe se o modelo respondeu no formato e se a agregação se pulverizou.
+    temas_distintos = len({c["tema"] for c in classificacoes})
+    falhas_formato = sum(1 for c in classificacoes if not c.get("formato_ok", True))
+    total = len(respostas_limpas)
+    observabilidade().update_current_span(
+        metadata={
+            "respostas": total,
+            "chamadas_llm": total + 1,
+            "pii_mascarada": pii_total,
+            "temas_distintos": temas_distintos,
+            "pulverizacao_temas": round(temas_distintos / total, 3) if total else 0,
+            "falhas_formato": falhas_formato,
+            "taxa_formato_valido": round(1 - falhas_formato / total, 3) if total else 1,
+            "sentimentos": contagem,
+        }
+    )
 
     return ResultadoAnalise(
         total=len(respostas_limpas),
