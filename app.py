@@ -4,11 +4,13 @@
 # Roda com: streamlit run app.py
 
 import io
+import time
 
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
+from feedbackloop.cache import cache_padrao
 from feedbackloop.llm import ClienteLLM
 from feedbackloop.observabilidade import cliente as observabilidade
 from feedbackloop.pipeline import analisar
@@ -95,8 +97,15 @@ def main():
             return
 
         with st.spinner("Classificando resposta por resposta e montando o resumo..."):
-            # sem cache: toda vez que clicar, paga tudo de novo. (planted)
-            resultado = analisar(cliente, respostas)
+            # O cache evita reclassificar o que já foi analisado nas últimas 24h.
+            # Se o arquivo não puder ser aberto, a análise segue sem cache.
+            try:
+                cache = cache_padrao()
+            except Exception:
+                cache = None
+            inicio = time.perf_counter()
+            resultado = analisar(cliente, respostas, cache=cache)
+            duracao = time.perf_counter() - inicio
         # Força o envio do trace agora. O exportador manda em lotes, em segundo
         # plano, e sem isto a análise poderia levar minutos para aparecer no
         # painel. Se o Langfuse estiver fora do ar, isto não derruba a página.
@@ -106,6 +115,19 @@ def main():
             pass
 
         st.markdown("### 3) Resultado")
+
+        total_chamadas = resultado.chamadas_llm + resultado.acertos_cache
+        if resultado.acertos_cache:
+            st.info(
+                f"⚡ {resultado.acertos_cache} de {total_chamadas} etapas vieram do cache, "
+                f"sem chamar o provedor. Análise em {duracao:.1f} s, "
+                f"com {resultado.chamadas_llm} chamada(s) ao modelo."
+            )
+        else:
+            st.caption(
+                f"Análise em {duracao:.1f} s, com {resultado.chamadas_llm} chamadas ao modelo. "
+                "Reanalisar as mesmas respostas nas próximas 24 h usa o cache."
+            )
 
         mascarados = sum(resultado.pii_mascarada.values())
         if mascarados:

@@ -230,21 +230,25 @@ class ResultadoAnalise:
     # O que foi mascarado antes do envio, por tipo. Fica visível para o
     # usuário em vez de o sistema pedir confiança cega.
     pii_mascarada: dict = field(default_factory=dict)
+    # Quantas chamadas ao provedor foram de fato feitas, e quantas o cache
+    # evitou. Somadas, dão o número de respostas mais um, o resumo.
+    chamadas_llm: int = 0
+    acertos_cache: int = 0
 
 
 # Entrada e saída desligadas: este é o único ponto do sistema que recebe as
 # respostas cruas, com nomes, e a saída contém o texto original para exibição.
 # O que vai para o trace é só o que está em `metadata`, no fim da função.
 @observe(name="analise-pesquisa", capture_input=False, capture_output=False)
-def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
+def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> ResultadoAnalise:
     """Pipeline ponta a ponta.
 
     Recebe a lista de respostas abertas e um `cliente` com método
     `.completar(system, user, temperatura)`. Nos testes esse cliente é um mock.
 
-    NOTA DE CUSTO (planted): isto faz 1 chamada de LLM POR RESPOSTA + 1 do
-    resumo, toda vez que roda. Sem cache, sem batch real. 40 respostas = 41
-    chamadas. Reanalisar a mesma planilha duas vezes paga duas vezes.
+    Sem `cache`, faz 1 chamada de LLM por resposta mais 1 do resumo, toda vez
+    que roda, como no protótipo. Com `cache`, o que já foi classificado nas
+    últimas 24 horas volta sem chamar o provedor. Ver feedbackloop/cache.py.
     """
     respostas_limpas = [r.strip() for r in respostas if r and r.strip()]
 
@@ -269,9 +273,44 @@ def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
             }
         )
 
+    # Chave do cache: modelo, prompt e texto JÁ SANITIZADO. Trocar o prompt ou o
+    # modelo muda a chave e invalida o cache sem intervenção manual.
+    modelo = getattr(cliente, "modelo", "desconhecido")
+    chamadas_llm = 0
+    acertos_cache = 0
+
+    def _ler_cache(chave):
+        if cache is None:
+            return None
+        try:
+            return cache.obter(chave)
+        except Exception:
+            # Cache quebrado vira cache vazio: a análise segue chamando o
+            # provedor, como antes de o cache existir.
+            return None
+
+    def _gravar_cache(chave, valor):
+        if cache is None:
+            return
+        try:
+            cache.guardar(chave, valor)
+        except Exception:
+            pass
+
     classificacoes = []
     for resp, s in zip(respostas_limpas, sanitizadas):
-        c, ok = _classificar(cliente, s.texto)
+        chave = cache.chave("classificacao", modelo, SYSTEM_CLASSIFICACAO, s.texto) if cache else None
+        guardado = _ler_cache(chave)
+        if guardado is not None:
+            c, ok = dict(guardado), True
+            acertos_cache += 1
+        else:
+            c, ok = _classificar(cliente, s.texto)
+            chamadas_llm += 1
+            # Só resultado no formato certo vai para o cache. Guardar uma falha
+            # a repetiria por 24 horas sem nova tentativa.
+            if ok:
+                _gravar_cache(chave, {"tema": c["tema"], "sentimento": c["sentimento"]})
         c["formato_ok"] = ok
         # O texto original fica só em memória, para exibição a quem enviou a
         # planilha. Ele não é passado a nenhuma função observada.
@@ -282,7 +321,20 @@ def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
     top_temas = contar_temas([c["tema"] for c in classificacoes])[:top_n]
     contagem = contar_sentimentos([c["sentimento"] for c in classificacoes])
 
-    texto = gerar_resumo_llm(cliente, top_temas, contagem)
+    # O resumo também vai para o cache. A entrada dele são só agregados, então a
+    # chave depende dos temas e das contagens, e não de nenhuma resposta.
+    chave_resumo = (
+        cache.chave("resumo", modelo, SYSTEM_RESUMO, top_temas, contagem) if cache else None
+    )
+    guardado = _ler_cache(chave_resumo)
+    if guardado is not None:
+        texto = guardado["texto"]
+        acertos_cache += 1
+    else:
+        texto = gerar_resumo_llm(cliente, top_temas, contagem)
+        chamadas_llm += 1
+        if texto:
+            _gravar_cache(chave_resumo, {"texto": texto})
     resumo = montar_resumo(top_temas, contagem, texto, len(respostas_limpas))
 
     # Métricas de qualidade da análise, usadas no dashboard. São indicadores
@@ -294,7 +346,9 @@ def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
     observabilidade().update_current_span(
         metadata={
             "respostas": total,
-            "chamadas_llm": total + 1,
+            "chamadas_llm": chamadas_llm,
+            "acertos_cache": acertos_cache,
+            "taxa_acerto_cache": round(acertos_cache / (total + 1), 3) if total else 0,
             "pii_mascarada": pii_total,
             "temas_distintos": temas_distintos,
             "pulverizacao_temas": round(temas_distintos / total, 3) if total else 0,
@@ -311,4 +365,6 @@ def analisar(cliente, respostas: list[str], top_n: int = 8) -> ResultadoAnalise:
         contagem_sentimentos=contagem,
         resumo=resumo,
         pii_mascarada=pii_total,
+        chamadas_llm=chamadas_llm,
+        acertos_cache=acertos_cache,
     )
