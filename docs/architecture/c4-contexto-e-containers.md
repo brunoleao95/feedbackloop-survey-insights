@@ -3,8 +3,9 @@
 Estes diagramas descrevem o sistema **como ele está publicado hoje**, e não como
 eu gostaria que estivesse. Onde falta alguma coisa, a falta aparece desenhada.
 
-Última verificação contra o ambiente real: 29/08/2026, produção rodando o commit
-`45f6624` em `https://feedbackloop-prod.onrender.com`.
+Última revisão: 16/10/2026, com a inclusão do componente de sanitização de PII
+no nível 3. Os níveis 1 e 2 não mudaram: a sanitização acontece dentro do mesmo
+contêiner, sem nova peça de infraestrutura.
 
 Notação em Mermaid, usando `flowchart` em vez da sintaxe C4 experimental do
 Mermaid, porque o `flowchart` renderiza de forma confiável direto no GitHub. Os
@@ -96,6 +97,7 @@ flowchart TB
     subgraph appc["Aplicacao Survey Insights [Container]"]
         ui["app.py<br/>[Componente: Streamlit]<br/><br/>Entrada de dados, disparo da<br/>analise e exibicao do resultado."]
         pipeline["feedbackloop/pipeline.py<br/>[Componente: Python puro]<br/><br/>Orquestra a analise. Funcoes puras<br/>de parsing e agregacao,<br/>testaveis offline."]
+        pii["feedbackloop/pii.py<br/>[Componente: sanitizador]<br/><br/>Mascara nome, e-mail, CPF e telefone.<br/>Funcao pura, sem rede."]
         adaptador["feedbackloop/llm.py<br/>[Componente: adaptador]<br/><br/>Unico ponto do codigo que conhece<br/>o provedor. Expoe apenas .completar."]
         csv[("data/respostas-pesquisa-exemplo.csv<br/>[Arquivo empacotado no deploy]<br/><br/>36 respostas sinteticas.")]
     end
@@ -105,7 +107,9 @@ flowchart TB
     analista2 -->|"HTTPS"| ui
     ui -->|"Le as respostas de exemplo"| csv
     ui -->|"Chama analisar<br/>com a lista de respostas"| pipeline
-    pipeline -->|"Chama .completar por resposta<br/>e uma vez para o resumo"| adaptador
+    pipeline -->|"Sanitiza cada resposta<br/>antes de qualquer envio"| pii
+    pii -->|"Devolve texto com<br/>[PESSOA], [EMAIL]..."| pipeline
+    pipeline -->|"Chama .completar com o texto<br/>ja sanitizado, e uma vez para o resumo"| adaptador
     pipeline -->|"Devolve ResultadoAnalise<br/>em memoria"| ui
     adaptador -->|"HTTPS"| llm2
 
@@ -119,11 +123,15 @@ um arquivo em vez de uma reescrita. O
 [ADR-001](../adr/adr-001-adocao-da-stack-b.md) apoia a decisão de manter a stack
 justamente nessa separação.
 
-**A fronteira de PII fica visível aqui.** O texto integral de cada resposta
-percorre `app.py` para `pipeline.py` para `llm.py` e sai para fora do Brasil, sem
-passar por nenhuma etapa de anonimização. Não existe componente entre o pipeline
-e o adaptador, e é exatamente esse componente ausente que a lacuna 1 da
-[auditoria](../auditoria-prototipo.md) descreve.
+**A fronteira de PII fica visível aqui.** Até a Etapa 1, o texto integral de cada
+resposta ia de `pipeline.py` direto para `llm.py` e saía do Brasil, sem nenhuma
+etapa de anonimização: não havia componente entre os dois, e esse componente
+ausente era a lacuna 1 da [auditoria](../auditoria-prototipo.md).
+
+Agora ele existe. `pii.py` fica no meio do caminho, e o pipeline só entrega ao
+adaptador o texto que passou por ele. O original continua em memória para ser
+exibido a quem enviou a planilha, mas não sai do processo. O que a sanitização
+cobre e onde ela falha está em [`docs/lgpd/mapa-de-dados.md`](../lgpd/mapa-de-dados.md).
 
 ---
 
