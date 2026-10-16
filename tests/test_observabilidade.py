@@ -44,3 +44,44 @@ def test_nunca_levanta_excecao():
 
     assert mascarar(Estranho()) is not None
     assert mascarar(None) is None
+
+
+def test_cliente_com_mascara_ativo_na_importacao():
+    """Regressão do defeito de 16/10: a máscara precisa existir antes do 1º @observe.
+
+    O cliente com máscara era criado só na primeira chamada ao LLM. O `@observe`
+    de `analisar` roda antes disso, e o SDK atendia com um cliente padrão, sem
+    máscara: um nome em texto cru, numa função com captura ligada, saía em claro.
+
+    Roda num interpretador separado, com chaves falsas, porque é com chaves que
+    o defeito aparece: sem elas o SDK usa um cliente inativo e o teste passaria
+    sem provar nada. A URL aponta para uma porta fechada, então nada sai da
+    máquina.
+    """
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    raiz = Path(__file__).resolve().parent.parent
+    ambiente = {
+        **os.environ,
+        "LANGFUSE_PUBLIC_KEY": "pk-lf-teste-local",
+        "LANGFUSE_SECRET_KEY": "sk-lf-teste-local",
+        "LANGFUSE_BASE_URL": "http://127.0.0.1:9",
+        "PYTHONPATH": str(raiz),
+    }
+    verificacao = "; ".join([
+        "import feedbackloop.pipeline",
+        "from langfuse import get_client",
+        "from feedbackloop.observabilidade import mascarar",
+        "print('MASCARA_ATIVA' if get_client()._mask is mascarar else 'SEM_MASCARA')",
+    ])
+    saida = subprocess.run(
+        [sys.executable, "-c", verificacao],
+        cwd=raiz, env=ambiente, capture_output=True, text=True, timeout=60,
+    )
+    assert "MASCARA_ATIVA" in saida.stdout, (
+        "o cliente ativo do Langfuse não usa a máscara: a 2ª e a 3ª camadas de "
+        f"proteção estão desligadas. stdout={saida.stdout!r} stderr={saida.stderr[-300:]!r}"
+    )

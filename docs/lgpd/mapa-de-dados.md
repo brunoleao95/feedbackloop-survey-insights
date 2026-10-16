@@ -119,6 +119,24 @@ sanitização de PII sozinha não pegaria isso: ela procura nomes, não credenci
 As três camadas têm testes em `tests/test_observabilidade.py`, inclusive um que
 simula um objeto cliente serializado por engano e confirma que a chave não sai.
 
+**Um defeito encontrado e corrigido no mesmo dia, 16/10.** Na primeira versão
+desta instrumentação, as camadas 2 e 3 estavam desligadas sem que nada indicasse
+isso. O cliente com a máscara só era criado na primeira chamada ao LLM, mas o
+`@observe` de `analisar` roda antes, e o SDK atendia essa primeira observação com
+um cliente padrão, sem máscara.
+
+Foi encontrado com um servidor local que imita o Langfuse e decodifica o que o SDK
+exporta: uma função observada, com captura ligada e texto cru, exportou o nome e
+a chave em claro. **Nenhum dado pessoal vazou em produção**, porque a camada 1
+segurou sozinha: todo texto que chegava a uma função com captura ligada já estava
+sanitizado. A correção cria o cliente com máscara na importação do módulo, e um
+teste de regressão, executado num interpretador separado e com chaves falsas,
+falha se a máscara não estiver ativa.
+
+Registro isto porque este documento afirmava três camadas enquanto só uma
+funcionava. A lição é a mesma do post-mortem de 29/08: proteção que não é testada
+contra o caso real é uma afirmação, não uma garantia.
+
 ## Riscos que sobram
 
 Esta é a parte mais importante do documento. O tratamento acima reduz o risco,

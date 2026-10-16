@@ -1,0 +1,112 @@
+name: Monitor de producao
+
+# Alerta P1: producao indisponivel ou quebrada.
+#
+# Nasceu da pendencia aberta no post-mortem de 29/08: a queda de producao foi
+# descoberta porque havia uma pessoa olhando a tela, e nao por algum sinal do
+# sistema. Este workflow roda os smoke tests contra producao a cada 30 minutos.
+# O quarto deles, o que importa o modulo da interface, teria detectado aquela
+# queda em vez de deixa-la passar com o healthcheck respondendo "ok".
+#
+#   Prioridade: P1. Usuario sem acesso ao sistema.
+#   Publico:    responsavel tecnico pelo servico, dono deste repositorio.
+#   Canal:      issue com o rotulo alerta-p1, que o GitHub notifica por e-mail
+#               a quem acompanha o repositorio. Ver docs/operacao/metricas-e-alertas.md.
+#
+# Para testar o disparo sem derrubar nada, rode manualmente pela aba Actions
+# informando uma URL que nao e a aplicacao, como https://example.com: o
+# healthcheck dela responde 404 e o teste da pagina nao encontra o Streamlit.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "URL alvo. Em branco usa producao. Informe uma URL quebrada para testar o alerta."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+# Duas verificacoes nunca rodam ao mesmo tempo, para nao abrir duas issues.
+concurrency:
+  group: monitor-producao
+  cancel-in-progress: false
+
+env:
+  # Configuracao, nao segredo: a URL de producao e publica.
+  URL_PRODUCAO: https://feedbackloop-prod.onrender.com
+  ROTULO: alerta-p1
+
+jobs:
+  verificar:
+    name: Verifica producao
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Instala dependencias
+        run: pip install -r requirements.txt
+
+      - name: Roda os smoke tests contra o alvo
+        id: smoke
+        env:
+          SMOKE_URL: ${{ inputs.url != '' && inputs.url || env.URL_PRODUCAO }}
+        run: |
+          echo "Alvo: $SMOKE_URL"
+          pytest tests/smoke -v 2>&1 | tee resultado.txt
+          exit "${PIPESTATUS[0]}"
+
+      - name: Abre ou atualiza o alerta P1
+        if: failure() && steps.smoke.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALVO: ${{ inputs.url != '' && inputs.url || env.URL_PRODUCAO }}
+          EXECUCAO: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create "$ROTULO" --color B60205 \
+            --description "P1: producao indisponivel ou quebrada" --force >/dev/null
+
+          falhas=$(grep -E "FAILED|ERROR" resultado.txt | head -10 || true)
+          corpo=$(printf '%s\n\n%s\n\n%s\n```\n%s\n```\n\n%s' \
+            "**Prioridade:** P1. Producao indisponivel ou quebrada." \
+            "**Alvo:** $ALVO" \
+            "**Testes que falharam:**" \
+            "${falhas:-ver o log da execucao}" \
+            "**Execucao:** $EXECUCAO. Procedimento de resposta em docs/operacao/metricas-e-alertas.md.")
+
+          # Uma issue aberta por incidente. Se ja existe, a nova falha vira
+          # comentario, em vez de lotar a caixa de entrada com duplicatas.
+          aberta=$(gh issue list --label "$ROTULO" --state open --json number --jq '.[0].number')
+          if [ -n "$aberta" ]; then
+            gh issue comment "$aberta" --body "Falha persiste em $(date -u +%Y-%m-%dT%H:%MZ).
+
+          $corpo"
+            echo "Comentado na issue #$aberta"
+          else
+            gh issue create --label "$ROTULO" \
+              --title "[P1] Producao indisponivel ou quebrada" \
+              --body "$corpo"
+          fi
+
+      - name: Fecha o alerta se producao se recuperou
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          aberta=$(gh issue list --label "$ROTULO" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$aberta" ]; then
+            gh issue close "$aberta" --comment "Recuperado em $(date -u +%Y-%m-%dT%H:%MZ): os smoke tests voltaram a passar. Registrar a causa no post-mortem."
+            echo "Issue #$aberta fechada"
+          else
+            echo "Nenhum alerta aberto. Producao saudavel."
+          fi
