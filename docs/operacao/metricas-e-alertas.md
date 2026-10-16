@@ -233,5 +233,18 @@ latência ao mesmo canal de issues do P1, pela integração com GitHub Actions.
 | Disponibilidade | GitHub, aba Actions, workflow *Monitor de producao* | Histórico de verificações do P1 |
 
 Os painéis do Langfuse e do Render exigem acesso às respectivas contas. Para quem
-não tem, a evidência dos números desta página está nos traces e no histórico de
-execução do GitHub Actions, que é público.
+não tem, há duas evidências públicas, que dispensam login.
+
+**Um trace real de produção, aberto para leitura:**
+[análise completa das 36 respostas, em produção, 16/10/2026](https://cloud.langfuse.com/project/cmvazqcvr01hfad0kifd23oag/traces/16aadd310862ab953ccc90815bbdbaf7).
+Mostra a árvore inteira, com a sanitização acontecendo antes da primeira chamada
+ao provedor, a latência e o custo de cada uma das 37 chamadas, e o `[PESSOA]` no
+lugar dos nomes nos prompts guardados. É o trace de onde saíram os números da
+linha de base de produção: 37,5 s e US$ 0,0089.
+
+Só este trace foi tornado público. Os demais seguem restritos à conta: conferido
+em 16/10 que este abre sem login e que outro trace do mesmo projeto, consultado
+da mesma forma, é recusado com "this trace is not public".
+
+**O histórico do alerta P1**, na aba Actions do repositório, workflow *Monitor de
+producao*, e a issue #1, aberta e fechada no teste de disparo.
