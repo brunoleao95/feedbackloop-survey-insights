@@ -128,6 +128,13 @@ O limite do provedor importa porque a análise de 36 respostas faz cerca de 55
 chamadas por minuto. Umas 9 análises simultâneas já esbarram nas 500 por minuto,
 e isso aparece como erro na métrica 3.
 
+**Desde a [otimização com cache](../otimizacao/cache.md)**, cada análise registra
+também `chamadas_llm`, `acertos_cache` e `taxa_acerto_cache` nos metadados do
+trace. Uma análise repetida faz 0 chamadas e envia 2 observações em vez de 76, o
+que reduz as duas pressões acima. A taxa de acerto é acompanhada sem limite
+definido: ela depende de quantas vezes o cliente reanalisa a mesma planilha, e
+cada deploy esvazia o cache. Ainda não há uso real para dizer o que é normal.
+
 ### 5. Qualidade
 
 | Sinal | Linha de base | Limite | Prioridade |

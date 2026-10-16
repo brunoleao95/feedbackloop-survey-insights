@@ -5,6 +5,66 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ## [Não publicado]
 
+## [1.1.0] - 2026-10-16
+
+O sistema deixa de mandar dado pessoal sem tratamento para o provedor, passa a
+ser observável e para de pagar duas vezes pela mesma análise. Fecha as lacunas
+1, 3 e 5 da [auditoria](docs/auditoria-prototipo.md), e passa a medir a 6, sem
+ainda resolvê-la.
+
+### Por que MINOR
+
+Tudo o que entrou é capacidade nova, e nada do que existia mudou de contrato: a
+entrada continua sendo o CSV ou o texto colado, a saída continua tendo tema,
+sentimento e resumo, e `classificar_resposta` devolve o mesmo dicionário de
+antes. Um usuário da 1.0.1 não precisa mudar nada para usar a 1.1.0.
+
+### Adicionado
+
+- **Sanitização de PII antes do LLM** (`feedbackloop/pii.py`). Nomes, e-mail, CPF
+  e telefone viram marcadores antes de qualquer chamada. A interface informa
+  quantos dados foram mascarados e mostra o texto que foi enviado. Um teste com
+  cliente espião falha se qualquer nome de exemplo chegar ao provedor.
+- **Observabilidade com Langfuse** (`feedbackloop/observabilidade.py`). Um trace
+  por análise, com a sanitização, cada chamada ao modelo, tokens, custo e as
+  métricas de qualidade nos metadados. A telemetria passa pela mesma máscara de
+  PII, e por um filtro de chaves de API. Ver
+  [ADR-003](docs/adr/adr-003-observabilidade-com-langfuse.md).
+- **Alerta P1** (`.github/workflows/monitor.yml`): smoke tests contra produção a
+  cada 30 minutos, abrindo e fechando uma issue `alerta-p1`. Testado nos dois
+  sentidos.
+- **Cache das respostas do LLM** (`feedbackloop/cache.py`), com prazo de 24 horas
+  e exclusão em SQL. Uma análise repetida passa de 37,5 s e US$ 0,0089 para
+  0,003 s e US$ 0. Ver [a medição](docs/otimizacao/cache.md).
+- Documentação de LGPD: [mapa de dados](docs/lgpd/mapa-de-dados.md) e
+  [política de retenção](docs/lgpd/retencao-e-exclusao.md).
+- [Rotação de credenciais](docs/seguranca/rotacao-de-credenciais.md), com
+  inventário, procedimento e auditoria do histórico do Git com `gitleaks`.
+- [Métricas e alertas](docs/operacao/metricas-e-alertas.md), com linha de base
+  medida em produção e limite justificado para cada métrica.
+- Falha de formato da resposta do modelo agora marca o span como `WARNING` e é
+  contada, em vez de virar "neutro" em silêncio.
+
+### Alterado
+
+- README reescrito como v1.0 da documentação de operação: stack, variáveis de
+  ambiente, deploy, operação, otimizações, troubleshooting e LGPD.
+- `.env.example` documenta todas as variáveis, separando segredo de
+  configuração.
+- Dependências transitivas do Langfuse fixadas: `protobuf` 5.29.6, que o
+  Streamlit 1.40 exige, e o OpenTelemetry 1.45.1.
+
+### Corrigido
+
+- O `app.py` passa a carregar o `.env`. O `python-dotenv` estava nas dependências
+  desde o protótipo, mas nunca era chamado.
+- A máscara do Langfuse só valia depois da primeira observação: o SDK criava um
+  cliente sem máscara antes. Encontrado capturando o tráfego com um servidor
+  local, antes de chegar a produção. Coberto por teste de regressão.
+- O custo por análise documentado na auditoria, US$ 0,027, era estimado. O
+  medido é US$ 0,0088.
+
+
 ## [1.0.1] - 2026-08-29
 
 Endurecimento após o incidente de indisponibilidade do mesmo dia. Nenhuma
@@ -110,6 +170,7 @@ Registrado aqui porque omitir seria pior do que admitir. Ver
 - Streamlit + um modelo GPT pequeno da OpenAI
 - Classificação de tema + sentimento por resposta e resumo executivo (Rafael)
 
-[Não publicado]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.0.1...HEAD
+[Não publicado]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/brunoleao95/feedbackloop-survey-insights/releases/tag/v1.0.0
