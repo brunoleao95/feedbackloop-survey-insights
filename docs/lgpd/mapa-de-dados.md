@@ -44,6 +44,7 @@ Marcos muda as prioridades toda semana" sem ter participado de nada.
 | 4 | **Exibição do resultado** | Respostas originais, tema, sentimento e resumo, na tela do analista | Mesma base do ponto 1 | O analista é quem enviou a planilha. Não há compartilhamento com terceiros |
 | 5 | **Logs de acesso da plataforma** | IP, agente do navegador e horário de quem acessa o app (o analista de RH, não o respondente) | Cumprimento de obrigação legal, Art. 7º, II, combinado com o Marco Civil da Internet, Art. 15 | Provedor de aplicação com fins econômicos é obrigado a guardar registro de acesso |
 | 6 | **Telemetria de observabilidade** (Langfuse) | Prompt sanitizado de cada chamada, resposta do modelo, tokens, latência e contagens agregadas. **Nunca** a resposta original | Legítimo interesse do operador, Art. 7º, IX, mais Art. 33 para a transferência | Sem telemetria não há como detectar falha silenciosa, custo fora do padrão ou queda de qualidade. Ver a seção de observabilidade abaixo |
+| 7 | **Cache de resultados** (SQLite no disco efêmero do serviço) | Hash SHA-256 da chave, tema, sentimento e texto do resumo, gerado de agregados. **Sem resposta, nem sanitizada, e sem nome** | Legítimo interesse do operador, Art. 7º, IX | Evita pagar e esperar de novo pela mesma análise. Expira em 24 horas com exclusão em SQL. Ver [docs/otimizacao/cache.md](../otimizacao/cache.md) |
 
 ### Minimização, que vem antes da base legal
 
@@ -55,8 +56,12 @@ existiria numa planilha real. O código lê apenas a coluna `resposta`. Setor,
 combinado com uma queixa específica, é um dos caminhos mais curtos para
 reidentificar alguém num time pequeno.
 
-**Nada é persistido.** O sistema não grava resposta, resultado ou histórico. O
-dado existe enquanto a análise roda e enquanto a página está aberta.
+**Nenhuma resposta é persistida.** O sistema não grava resposta nem histórico. O
+texto existe enquanto a análise roda e enquanto a página está aberta. O único
+dado armazenado é o cache, que guarda só tema, sentimento e o texto do resumo,
+sob uma chave em hash, por até 24 horas. Ver
+[a política de retenção](retencao-e-exclusao.md) e
+[a otimização com cache](../otimizacao/cache.md).
 
 **Só o texto sanitizado sai do processo.** A sanitização acontece em
 `feedbackloop/pipeline.py`, dentro de `analisar()`, que é o único caminho até o
@@ -214,15 +219,18 @@ controlador**, a empresa cliente. Se chegarem à FeedbackLoop, são encaminhados
 controlador em até 2 dias úteis, para que ele cumpra o prazo de 15 dias do
 Art. 19, II.
 
-Na prática, a FeedbackLoop tem pouco a eliminar: o sistema não persiste resposta
-nem resultado. O que pode existir é o texto sanitizado nos logs do provedor, por
-até 30 dias, e o registro de acesso na plataforma.
+Na prática, a FeedbackLoop tem pouco a eliminar: o sistema não persiste
+resposta. O que pode existir é o texto sanitizado nos logs do provedor, por até
+30 dias, os traces mascarados no Langfuse, por até 30 dias, o cache de
+resultados, que expira sozinho em 24 horas, e o registro de acesso na
+plataforma.
 
 ## Quando revisar este documento
 
 Revisar sempre que uma destas coisas mudar:
 
-- O sistema passar a persistir qualquer dado (incluindo cache)
+- O sistema passar a persistir qualquer dado além do cache, ou o cache passar a
+  guardar texto de resposta
 - Trocar o provedor de LLM ou a forma de chamá-lo
 - O CSV aceito passar a ler outra coluna além de `resposta`
 - A política de dados do provedor mudar
