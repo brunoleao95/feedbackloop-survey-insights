@@ -28,7 +28,10 @@ concurrency:
 jobs:
   testes:
     name: Testes unitarios
-    runs-on: ubuntu-latest
+    # Fixado, e nao ubuntu-latest: em 20/10/2026 o ubuntu-latest passou a ser
+    # o 26.04, que nao tem build do Python 3.13.2, e o setup-python quebrou.
+    # Mesma licao do httpx e do protobuf: o que nao esta fixado muda sozinho.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -52,7 +55,7 @@ jobs:
     name: Deploy
     needs: testes
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
     steps:
       - name: Dispara o deploy no Render
@@ -125,7 +128,7 @@ jobs:
   smoke:
     name: Smoke tests
     needs: deploy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
     steps:
       - uses: actions/checkout@v4
