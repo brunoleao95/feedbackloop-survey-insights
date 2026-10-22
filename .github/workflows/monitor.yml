@@ -44,7 +44,10 @@ env:
 jobs:
   verificar:
     name: Verifica producao
-    runs-on: ubuntu-latest
+    # Fixado, e nao ubuntu-latest: em 20/10/2026 o ubuntu-latest passou a ser
+    # o 26.04, que nao tem build do Python 3.13.2, e o setup-python quebrou.
+    # Mesma licao do httpx e do protobuf: o que nao esta fixado muda sozinho.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
