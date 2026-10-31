@@ -29,10 +29,10 @@ controle direto deste código. A tabela abaixo diz qual é qual.
 
 ### 1. Respostas e resultado: retenção zero, por construção
 
-**Mecanismo:** o resultado de `analisar()` é atribuído a uma variável local de
-`main()` em `app.py`. O Streamlit reexecuta o script do início a cada interação,
-então a variável deixa de existir ao fim de cada execução. Ela não é colocada em
-`st.session_state`, não é escrita em arquivo e não vai para banco.
+**Mecanismo:** o resultado de `analisar()` existe só dentro da requisição em
+`app.py`: é transmitido ao navegador de quem pediu a análise e descartado quando
+a resposta termina. Não é escrito em arquivo, não vai para banco e não fica em
+sessão no servidor. Quem quiser guardar baixa o CSV no próprio navegador.
 
 Desde a introdução do cache, uma parte do resultado é guardada: tema e sentimento
 de cada resposta, e o texto do resumo. **As respostas, originais ou sanitizadas,

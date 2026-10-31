@@ -1,14 +1,25 @@
-# TODO: isso aqui virou um arquivão. Devia quebrar em componentes. (Rafael)
-# FeedbackLoop — Survey Insights
-# App de análise EM LOTE de respostas abertas de pesquisa de clima.
-# Roda com: streamlit run app.py
+# FeedbackLoop — Survey Insights: servidor web.
+#
+# Substitui a interface em Streamlit herdada do protótipo. A regra de negócio
+# continua inteira em feedbackloop/; este arquivo só expõe uma API pequena e
+# serve a página em static/. Ver docs/adr/adr-004-interface-web-com-fastapi.md.
+#
+# Roda com: uvicorn app:app --reload
 
+import csv
 import io
+import json
+import logging
+import queue
+import threading
 import time
+from pathlib import Path
 
-import pandas as pd
-import streamlit as st
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from feedbackloop.cache import cache_padrao
 from feedbackloop.llm import ClienteLLM
@@ -16,149 +27,169 @@ from feedbackloop.observabilidade import cliente as observabilidade
 from feedbackloop.pipeline import analisar
 
 # Carrega o .env local, se existir. Em produção as variáveis vêm da plataforma e
-# o arquivo não existe, então isto não faz nada lá. O python-dotenv estava no
-# requirements.txt desde o protótipo herdado, mas nunca era chamado: criar um
-# .env não tinha efeito nenhum, e a documentação apontava para um mecanismo que
-# não existia.
+# o arquivo não existe, então isto não faz nada lá.
 load_dotenv()
 
-# arquivo de exemplo que já vem no repo (dados sintéticos)
-CSV_EXEMPLO = "data/respostas-pesquisa-exemplo.csv"
-COLUNA_RESPOSTA = "resposta"  # hardcoded; se a planilha do RH usar outro nome, quebra
+RAIZ = Path(__file__).resolve().parent
+ESTATICOS = RAIZ / "static"
+CSV_EXEMPLO = RAIZ / "data" / "respostas-pesquisa-exemplo.csv"
+COLUNA_RESPOSTA = "resposta"
+
+# Limites de entrada. Uma análise faz uma chamada ao provedor por resposta, e a
+# requisição fica aberta até o fim: sem teto, uma planilha grande prende o
+# processo por minutos e consome o orçamento do mês de uma vez.
+MAX_RESPOSTAS = 300
+MAX_CARACTERES_POR_RESPOSTA = 2000
+MAX_BYTES_CSV = 1_000_000
+
+log = logging.getLogger("feedbackloop")
+
+app = FastAPI(title="FeedbackLoop", docs_url=None, redoc_url=None)
+app.mount("/static", StaticFiles(directory=ESTATICOS), name="static")
 
 
-def carregar_respostas_do_csv(conteudo) -> list[str]:
-    """Lê um CSV e devolve a lista de respostas da coluna esperada."""
-    df = pd.read_csv(conteudo)
-    if COLUNA_RESPOSTA not in df.columns:
-        st.error(
+class PedidoAnalise(BaseModel):
+    respostas: list[str] = Field(min_length=1)
+
+
+class PedidoCsv(BaseModel):
+    conteudo: str
+
+
+def ler_respostas_csv(texto: str) -> list[str]:
+    """Lê o CSV e devolve a coluna de respostas, sem linhas vazias.
+
+    Só a coluna `resposta` é lida, de propósito: colunas como `setor`,
+    combinadas com uma queixa específica, reidentificam alguém num time pequeno.
+    Ver docs/lgpd/mapa-de-dados.md.
+    """
+    leitor = csv.DictReader(io.StringIO(texto.lstrip("﻿")))
+    if not leitor.fieldnames or COLUNA_RESPOSTA not in leitor.fieldnames:
+        colunas = ", ".join(leitor.fieldnames or []) or "nenhuma"
+        raise ValueError(
             f"O CSV precisa ter uma coluna chamada '{COLUNA_RESPOSTA}'. "
-            f"Colunas encontradas: {list(df.columns)}"
+            f"Colunas encontradas: {colunas}."
         )
-        return []
-    return [str(x) for x in df[COLUNA_RESPOSTA].dropna().tolist()]
+    return [linha[COLUNA_RESPOSTA].strip() for linha in leitor if (linha[COLUNA_RESPOSTA] or "").strip()]
 
 
-def main():
-    st.set_page_config(page_title="FeedbackLoop — Insights", page_icon="📊")
-    st.title("📊 FeedbackLoop — Survey Insights")
-    st.caption(
-        "Cole ou suba as respostas abertas da pesquisa de clima. "
-        "A gente agrupa por tema, marca o sentimento e gera um resumo executivo."
-    )
-
-    st.info(
-        "🔒 Nomes de pessoas, e-mails, CPFs e telefones são mascarados **antes** "
-        "de qualquer envio ao provedor de IA, que processa fora do Brasil. "
-        "A sanitização cobre o padrão mais comum, não todos os casos: "
-        "não carregue dado real sem revisão prévia (ver README, seção LGPD)."
-    )
-
-    st.markdown("### 1) Entrada de dados")
-    fonte = st.radio(
-        "De onde vêm as respostas?",
-        ["Colar texto (uma resposta por linha)", "Subir CSV", "Usar dados de exemplo"],
-        index=2,
-    )
-
-    respostas: list[str] = []
-
-    if fonte == "Colar texto (uma resposta por linha)":
-        texto = st.text_area("Respostas (uma por linha)", height=200)
-        if texto.strip():
-            respostas = [linha for linha in texto.splitlines() if linha.strip()]
-
-    elif fonte == "Subir CSV":
-        arquivo = st.file_uploader(
-            f"CSV com uma coluna '{COLUNA_RESPOSTA}'", type=["csv"]
+def validar(respostas: list[str]) -> list[str]:
+    limpas = [r.strip() for r in respostas if r and r.strip()]
+    if not limpas:
+        raise HTTPException(422, "Nenhuma resposta com texto para analisar.")
+    if len(limpas) > MAX_RESPOSTAS:
+        raise HTTPException(
+            422, f"Esta versão analisa até {MAX_RESPOSTAS} respostas por vez; recebi {len(limpas)}."
         )
-        if arquivo is not None:
-            respostas = carregar_respostas_do_csv(io.BytesIO(arquivo.getvalue()))
+    longas = sum(1 for r in limpas if len(r) > MAX_CARACTERES_POR_RESPOSTA)
+    if longas:
+        raise HTTPException(
+            422,
+            f"{longas} resposta(s) passam de {MAX_CARACTERES_POR_RESPOSTA} caracteres. "
+            "Confira se o arquivo não juntou várias linhas numa só.",
+        )
+    return limpas
 
-    else:  # exemplo
+
+def serializar(resultado, duracao: float) -> dict:
+    """Converte o resultado do pipeline no que a página precisa exibir."""
+    return {
+        "total": resultado.total,
+        "duracao_s": round(duracao, 2),
+        "chamadas_llm": resultado.chamadas_llm,
+        "acertos_cache": resultado.acertos_cache,
+        "pii_mascarada": resultado.pii_mascarada,
+        "sentimentos": resultado.contagem_sentimentos,
+        "temas": [{"tema": t, "quantidade": q} for t, q in resultado.top_temas],
+        "texto_resumo": resultado.texto_resumo,
+        "classificacoes": [
+            {
+                "resposta": c["resposta"],
+                "texto_enviado": c["texto_enviado"],
+                "tema": c["tema"],
+                "sentimento": c["sentimento"],
+            }
+            for c in resultado.classificacoes
+        ],
+    }
+
+
+@app.get("/", include_in_schema=False)
+def pagina():
+    return FileResponse(ESTATICOS / "index.html")
+
+
+@app.get("/saude")
+def saude():
+    """Healthcheck barato: diz só que o processo está de pé."""
+    return {"status": "ok"}
+
+
+@app.get("/api/exemplo")
+def exemplo():
+    """As 36 respostas sintéticas de exemplo. Ver data/AVISO-DADOS-SINTETICOS.md."""
+    return {"respostas": ler_respostas_csv(CSV_EXEMPLO.read_text(encoding="utf-8"))}
+
+
+@app.post("/api/csv")
+def importar_csv(pedido: PedidoCsv):
+    if len(pedido.conteudo.encode("utf-8")) > MAX_BYTES_CSV:
+        raise HTTPException(413, "Arquivo maior que 1 MB.")
+    try:
+        return {"respostas": ler_respostas_csv(pedido.conteudo)}
+    except (ValueError, csv.Error) as erro:
+        raise HTTPException(422, str(erro)) from None
+
+
+@app.post("/api/analisar")
+def api_analisar(pedido: PedidoAnalise):
+    """Roda a análise e transmite o andamento em NDJSON, uma linha por evento.
+
+    A análise leva dezenas de segundos. Em vez de deixar a página parada até o
+    fim, cada resposta classificada vira um evento de progresso, e o último
+    evento traz o resultado completo ou o erro.
+    """
+    respostas = validar(pedido.respostas)
+    try:
+        cliente = ClienteLLM()
+    except KeyError:
+        raise HTTPException(503, "OPENAI_API_KEY não configurada no servidor.") from None
+
+    eventos: queue.Queue = queue.Queue()
+
+    def trabalhar():
         try:
-            respostas = carregar_respostas_do_csv(CSV_EXEMPLO)
-            st.info(f"Carregadas {len(respostas)} respostas sintéticas de exemplo.")
-        except FileNotFoundError:
-            st.error(f"Não achei {CSV_EXEMPLO}. Rode o app a partir da raiz do projeto.")
-
-    if respostas:
-        st.write(f"**{len(respostas)} respostas** prontas para análise.")
-        with st.expander("Ver respostas"):
-            st.write(respostas)
-
-    st.markdown("### 2) Análise")
-    if st.button("Analisar respostas", type="primary", disabled=not respostas):
-        # cria o cliente real só na hora de rodar (precisa da OPENAI_API_KEY)
-        try:
-            cliente = ClienteLLM()
-        except KeyError:
-            st.error("OPENAI_API_KEY não configurada. Veja o .env.example.")
-            return
-
-        with st.spinner("Classificando resposta por resposta e montando o resumo..."):
-            # O cache evita reclassificar o que já foi analisado nas últimas 24h.
-            # Se o arquivo não puder ser aberto, a análise segue sem cache.
             try:
                 cache = cache_padrao()
             except Exception:
                 cache = None
             inicio = time.perf_counter()
-            resultado = analisar(cliente, respostas, cache=cache)
-            duracao = time.perf_counter() - inicio
-        # Força o envio do trace agora. O exportador manda em lotes, em segundo
-        # plano, e sem isto a análise poderia levar minutos para aparecer no
-        # painel. Se o Langfuse estiver fora do ar, isto não derruba a página.
-        try:
-            observabilidade().flush()
-        except Exception:
-            pass
-
-        st.markdown("### 3) Resultado")
-
-        total_chamadas = resultado.chamadas_llm + resultado.acertos_cache
-        if resultado.acertos_cache:
-            st.info(
-                f"⚡ {resultado.acertos_cache} de {total_chamadas} etapas vieram do cache, "
-                f"sem chamar o provedor. Análise em {duracao:.1f} s, "
-                f"com {resultado.chamadas_llm} chamada(s) ao modelo."
+            resultado = analisar(
+                cliente,
+                respostas,
+                cache=cache,
+                ao_progredir=lambda feitas, total: eventos.put(
+                    {"tipo": "progresso", "feitas": feitas, "total": total}
+                ),
             )
-        else:
-            st.caption(
-                f"Análise em {duracao:.1f} s, com {resultado.chamadas_llm} chamadas ao modelo. "
-                "Reanalisar as mesmas respostas nas próximas 24 h usa o cache."
-            )
+            eventos.put({"tipo": "resultado", **serializar(resultado, time.perf_counter() - inicio)})
+        except Exception as erro:
+            # O detalhe vai para o log do serviço; a página recebe só o tipo do
+            # erro, sem nada que possa conter dado de entrada.
+            log.exception("analise falhou")
+            eventos.put({"tipo": "erro", "mensagem": f"A análise falhou: {type(erro).__name__}."})
+        finally:
+            # Força o envio do trace agora, em vez de esperar o próximo lote.
+            try:
+                observabilidade().flush()
+            except Exception:
+                pass
+            eventos.put(None)
 
-        mascarados = sum(resultado.pii_mascarada.values())
-        if mascarados:
-            partes = ", ".join(f"{n} {tipo}" for tipo, n in sorted(resultado.pii_mascarada.items()))
-            st.success(f"🔒 {mascarados} dado(s) pessoal(is) mascarado(s) antes do envio: {partes}.")
-        else:
-            st.caption("Nenhum dado pessoal detectado nas respostas.")
+    threading.Thread(target=trabalhar, daemon=True).start()
 
-        st.markdown(resultado.resumo)
+    def transmitir():
+        while (evento := eventos.get()) is not None:
+            yield json.dumps(evento, ensure_ascii=False) + "\n"
 
-        st.markdown("#### Detalhe por resposta")
-        tabela = pd.DataFrame(resultado.classificacoes)[
-            ["resposta", "tema", "sentimento"]
-        ]
-        st.dataframe(tabela, use_container_width=True)
-
-        # Mostra exatamente o que saiu do processo. Em vez de pedir confiança,
-        # deixa conferir: é o texto que o provedor recebeu, palavra por palavra.
-        enviadas = [c for c in resultado.classificacoes if c["texto_enviado"] != c["resposta"]]
-        with st.expander(f"Ver o que foi enviado ao provedor ({len(enviadas)} resposta(s) alterada(s))"):
-            for c in enviadas:
-                st.markdown(f"**Original:** {c['resposta']}")
-                st.markdown(f"**Enviado:** {c['texto_enviado']}")
-                st.divider()
-
-        # TODO: nada disso é persistido. Fechou a aba, perdeu o resultado. (Rafael)
-        st.caption(
-            "Obs.: este resultado não é salvo em lugar nenhum. "
-            "Baixe se precisar (em breve... talvez)."
-        )
-
-
-if __name__ == "__main__":
-    main()
+    return StreamingResponse(transmitir(), media_type="application/x-ndjson")

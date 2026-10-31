@@ -234,13 +234,18 @@ class ResultadoAnalise:
     # evitou. Somadas, dão o número de respostas mais um, o resumo.
     chamadas_llm: int = 0
     acertos_cache: int = 0
+    # Só a leitura qualitativa do modelo, sem o cabeçalho de números. A
+    # interface monta os números a partir dos campos estruturados acima.
+    texto_resumo: str = ""
 
 
 # Entrada e saída desligadas: este é o único ponto do sistema que recebe as
 # respostas cruas, com nomes, e a saída contém o texto original para exibição.
 # O que vai para o trace é só o que está em `metadata`, no fim da função.
 @observe(name="analise-pesquisa", capture_input=False, capture_output=False)
-def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> ResultadoAnalise:
+def analisar(
+    cliente, respostas: list[str], top_n: int = 8, cache=None, ao_progredir=None
+) -> ResultadoAnalise:
     """Pipeline ponta a ponta.
 
     Recebe a lista de respostas abertas e um `cliente` com método
@@ -249,6 +254,10 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
     Sem `cache`, faz 1 chamada de LLM por resposta mais 1 do resumo, toda vez
     que roda, como no protótipo. Com `cache`, o que já foi classificado nas
     últimas 24 horas volta sem chamar o provedor. Ver feedbackloop/cache.py.
+
+    `ao_progredir(feitas, total)`, se informado, é chamado a cada etapa
+    concluída: uma por resposta e uma pelo resumo. A interface usa isso para
+    mostrar o andamento de uma análise que leva dezenas de segundos.
     """
     respostas_limpas = [r.strip() for r in respostas if r and r.strip()]
 
@@ -297,6 +306,17 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
         except Exception:
             pass
 
+    etapas = len(respostas_limpas) + 1
+
+    def _avisar(feitas):
+        if ao_progredir is None:
+            return
+        try:
+            ao_progredir(feitas, etapas)
+        except Exception:
+            # Quem acompanha o andamento nunca derruba a análise.
+            pass
+
     classificacoes = []
     for resp, s in zip(respostas_limpas, sanitizadas):
         chave = cache.chave("classificacao", modelo, SYSTEM_CLASSIFICACAO, s.texto) if cache else None
@@ -317,6 +337,7 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
         c["resposta"] = resp
         c["texto_enviado"] = s.texto
         classificacoes.append(c)
+        _avisar(len(classificacoes))
 
     top_temas = contar_temas([c["tema"] for c in classificacoes])[:top_n]
     contagem = contar_sentimentos([c["sentimento"] for c in classificacoes])
@@ -336,6 +357,7 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
         if texto:
             _gravar_cache(chave_resumo, {"texto": texto})
     resumo = montar_resumo(top_temas, contagem, texto, len(respostas_limpas))
+    _avisar(etapas)
 
     # Métricas de qualidade da análise, usadas no dashboard. São indicadores
     # indiretos: o sistema não tem gabarito para saber se um tema está certo,
@@ -367,4 +389,5 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
         pii_mascarada=pii_total,
         chamadas_llm=chamadas_llm,
         acertos_cache=acertos_cache,
+        texto_resumo=(texto or "").strip(),
     )

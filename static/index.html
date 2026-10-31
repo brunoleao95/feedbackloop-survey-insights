@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FeedbackLoop · Survey Insights</title>
+  <meta name="description" content="Análise de respostas abertas de pesquisa de clima: temas, sentimento e resumo executivo.">
+  <link rel="icon" href="/static/icone.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/estilo.css">
+</head>
+<body>
+  <header class="topo">
+    <div class="topo-conteudo">
+      <a class="marca" href="/">
+        <img src="/static/icone.svg" alt="" width="28" height="28">
+        <span>FeedbackLoop</span>
+      </a>
+      <span class="selo" title="Nomes, e-mails, CPFs e telefones são substituídos por marcadores antes de qualquer envio ao provedor de IA.">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5l-8-3Z"/></svg>
+        Dados pessoais mascarados antes do envio
+      </span>
+    </div>
+  </header>
+
+  <main id="app">
+    <section class="abertura">
+      <h1>O que o seu time escreveu, em minutos</h1>
+      <p>Envie as respostas abertas da pesquisa de clima. Cada resposta recebe um tema e um sentimento, e a liderança recebe um resumo com as ações recomendadas.</p>
+    </section>
+
+    <section class="cartao" id="entrada">
+      <div class="abas" role="tablist">
+        <button role="tab" class="aba ativa" data-aba="exemplo" aria-selected="true">Dados de exemplo</button>
+        <button role="tab" class="aba" data-aba="colar" aria-selected="false">Colar texto</button>
+        <button role="tab" class="aba" data-aba="csv" aria-selected="false">Enviar CSV</button>
+      </div>
+
+      <div class="painel" data-painel="exemplo">
+        <p class="nota">36 respostas sintéticas, com nomes inventados de propósito para mostrar o mascaramento funcionando.</p>
+      </div>
+      <div class="painel" data-painel="colar" hidden>
+        <label for="texto" class="rotulo">Uma resposta por linha</label>
+        <textarea id="texto" rows="8" placeholder="A carga de trabalho está insustentável...&#10;Gosto muito do time, o pessoal é colaborativo..."></textarea>
+      </div>
+      <div class="painel" data-painel="csv" hidden>
+        <label class="soltar" id="soltar">
+          <input type="file" id="arquivo" accept=".csv,text/csv">
+          <strong>Escolha um arquivo CSV</strong> ou arraste aqui
+          <span class="nota">O arquivo precisa de uma coluna chamada <code>resposta</code>. As outras colunas são ignoradas.</span>
+        </label>
+      </div>
+
+      <div class="acoes">
+        <span id="contagem" class="nota" aria-live="polite"></span>
+        <button id="analisar" class="botao" disabled>Analisar respostas</button>
+      </div>
+      <p id="erro" class="erro" role="alert" hidden></p>
+    </section>
+
+    <section class="cartao" id="andamento" hidden>
+      <div class="andamento-topo">
+        <strong id="andamento-texto">Preparando a análise…</strong>
+        <span id="andamento-pct" class="nota">0%</span>
+      </div>
+      <div class="barra" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="barra-preenchida" id="barra"></div>
+      </div>
+      <p class="nota">Primeiro os dados pessoais são mascarados. Depois cada resposta é classificada e, por fim, o resumo é escrito.</p>
+    </section>
+
+    <section id="resultado" hidden>
+      <div class="indicadores">
+        <div class="indicador"><span class="valor" id="i-total">–</span><span class="legenda">respostas analisadas</span></div>
+        <div class="indicador"><span class="valor" id="i-negativo">–</span><span class="legenda">com sentimento negativo</span></div>
+        <div class="indicador"><span class="valor" id="i-tema">–</span><span class="legenda">tema mais citado</span></div>
+        <div class="indicador"><span class="valor" id="i-tempo">–</span><span class="legenda" id="i-tempo-legenda">tempo de análise</span></div>
+      </div>
+
+      <div class="grade">
+        <article class="cartao">
+          <h2>Resumo para a liderança</h2>
+          <div id="resumo" class="resumo"></div>
+          <div class="acoes-secundarias">
+            <button class="botao-secundario" id="copiar">Copiar resumo</button>
+            <button class="botao-secundario" id="baixar">Baixar resultado (CSV)</button>
+          </div>
+        </article>
+
+        <div class="coluna">
+          <article class="cartao">
+            <h2>Sentimento</h2>
+            <div class="empilhada" id="sentimentos"></div>
+            <ul class="legenda-cores" id="sentimentos-legenda"></ul>
+          </article>
+          <article class="cartao">
+            <h2>Principais temas</h2>
+            <ul class="temas" id="temas"></ul>
+          </article>
+        </div>
+      </div>
+
+      <article class="cartao privacidade">
+        <div>
+          <h2>Privacidade</h2>
+          <p id="pii-texto"></p>
+        </div>
+        <details id="pii-detalhes">
+          <summary>Ver exatamente o que foi enviado ao provedor</summary>
+          <div id="pii-lista"></div>
+        </details>
+      </article>
+
+      <article class="cartao">
+        <div class="tabela-topo">
+          <h2>Resposta por resposta</h2>
+          <div class="filtros">
+            <select id="filtro-tema" aria-label="Filtrar por tema"><option value="">Todos os temas</option></select>
+            <select id="filtro-sentimento" aria-label="Filtrar por sentimento">
+              <option value="">Todos os sentimentos</option>
+              <option value="positivo">Positivo</option>
+              <option value="neutro">Neutro</option>
+              <option value="negativo">Negativo</option>
+            </select>
+          </div>
+        </div>
+        <div class="tabela-rolagem">
+          <table>
+            <thead><tr><th>Resposta</th><th>Tema</th><th>Sentimento</th></tr></thead>
+            <tbody id="linhas"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <footer class="rodape">
+    <p>O resultado não é salvo no servidor: baixe o CSV se precisar guardar. Respostas analisadas nas últimas 24 horas voltam do cache, sem novo custo.</p>
+    <p><a href="https://github.com/brunoleao95/feedbackloop-survey-insights">Código, documentação e política de dados</a></p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

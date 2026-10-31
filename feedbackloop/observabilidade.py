@@ -59,8 +59,8 @@ def mascarar(data, **_):
 def iniciar() -> Langfuse:
     """Cria o cliente uma única vez por processo.
 
-    O Streamlit reexecuta o script inteiro a cada interação. Sem o cache, cada
-    clique criaria um cliente novo, com seu próprio exportador em segundo plano.
+    Sem o cache, cada análise criaria um cliente novo, com seu próprio
+    exportador em segundo plano.
     """
     return Langfuse(
         mask=mascarar,
