@@ -209,7 +209,7 @@ function desenhar(r) {
     .join(", ");
   const alteradas = r.classificacoes.filter((c) => c.texto_enviado !== c.resposta);
   $("pii-texto").innerHTML = mascarados
-    ? `<strong>${mascarados} dado${mascarados > 1 ? "s" : ""} pessoal${mascarados > 1 ? "is" : ""} mascarado${mascarados > 1 ? "s" : ""}</strong> antes do envio ao provedor de IA (${escapar(tipos)}). O texto original não sai do servidor.`
+    ? `<strong>${mascarados} dado${mascarados > 1 ? "s" : ""} pessoa${mascarados > 1 ? "is" : "l"} mascarado${mascarados > 1 ? "s" : ""}</strong> antes do envio ao provedor de IA (${escapar(tipos)}). O texto original não sai do servidor.`
     : "Nenhum dado pessoal foi detectado nas respostas.";
   $("pii-detalhes").hidden = alteradas.length === 0;
   $("pii-lista").innerHTML = alteradas.map((c) =>
