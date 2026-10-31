@@ -419,6 +419,11 @@ def analisar(
             "pii_mascarada": pii_total,
             "temas_distintos": temas_distintos,
             "pulverizacao_temas": round(temas_distintos / total, 3) if total else 0,
+            # Com a taxonomia fixa, o sinal de tema que a lista não cobre é a
+            # fração de respostas que caíram em "Outros".
+            "taxa_outros": round(
+                sum(1 for c in classificacoes if c["tema"] == TEMA_OUTROS) / total, 3
+            ) if total else 0,
             "falhas_formato": falhas_formato,
             "taxa_formato_valido": round(1 - falhas_formato / total, 3) if total else 1,
             "sentimentos": contagem,
