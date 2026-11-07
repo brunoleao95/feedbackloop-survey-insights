@@ -54,7 +54,10 @@ jobs:
   deploy:
     name: Deploy
     needs: testes
-    if: github.event_name == 'push'
+    # Push e disparo manual publicam; pull request so testa. Em 07/11/2026 o
+    # GitHub nao entregou o evento de push de um merge na main, e o disparo
+    # manual pulava o deploy: nao havia como publicar sem um commit novo.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     environment: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
     steps:
