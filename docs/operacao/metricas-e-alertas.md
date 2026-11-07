@@ -188,8 +188,8 @@ memória pelo pandas.
 | **Prioridade** | P1 |
 | **Público** | Responsável técnico pelo serviço, dono do repositório |
 | **Canal** | Issue no repositório com o rótulo `alerta-p1`, notificada por e-mail pelo GitHub |
-| **Gatilho** | Qualquer um dos 4 smoke tests falhando contra produção |
-| **Frequência** | A cada 30 minutos, em `.github/workflows/monitor.yml` |
+| **Gatilho** | Qualquer um dos 5 smoke tests falhando contra produção |
+| **Frequência** | Configurado para cada 30 minutos em `.github/workflows/monitor.yml`. Na prática, o agendador do GitHub executou a cada 4,5 horas em média entre 16/10 e 07/11 |
 | **Recuperação** | A primeira verificação que passa fecha a issue sozinha |
 
 **Por que esse alerta, e não outro.** Ele fecha a pendência aberta no
