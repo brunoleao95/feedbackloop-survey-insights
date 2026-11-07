@@ -9,11 +9,13 @@ A distincao nasceu de um incidente real desta etapa. O deploy foi marcado como
 funcionalidade central estava quebrada por uma dependencia transitiva. Todos os
 sinais estavam verdes e o sistema nao funcionava.
 
-Por isso os tres testes cobrem camadas diferentes, do mais raso ao mais fundo:
+Por isso os testes cobrem camadas diferentes, do mais raso ao mais fundo:
 
-  1. test_healthcheck_responde     -> o processo esta vivo e servindo
-  2. test_app_carregou             -> o Streamlit inicializou o app, nao so o servidor
-  3. test_cadeia_do_llm_construivel -> a cadeia de dependencias do LLM esta intacta
+  1. test_healthcheck_responde      -> o processo esta vivo e servindo
+  2. test_app_carregou              -> a pagina do app e servida, com seus arquivos
+  3. test_api_responde_com_dados    -> a API le os dados empacotados no deploy
+  4. test_cadeia_do_llm_construivel -> a cadeia de dependencias do LLM esta intacta
+  5. test_app_importavel_sem_configuracao_extra -> o modulo carrega com o ambiente documentado
 
 O terceiro e o que teria pego o incidente. Ele nao chama a API do provedor e nao
 consome credito: usa uma chave falsa e verifica apenas que o cliente se constroi.
@@ -58,14 +60,14 @@ def _get(caminho: str = "") -> httpx.Response:
 
 @requer_url
 def test_healthcheck_responde():
-    """O endpoint de saude do Streamlit devolve ok.
+    """O endpoint de saude do servidor devolve ok.
 
     E a verificacao mais barata de todas e a unica que responde "o processo
     subiu". Nao diz nada sobre a aplicacao em si.
     """
-    resposta = _get("/_stcore/health")
+    resposta = _get("/saude")
     assert resposta.status_code == 200, f"healthcheck devolveu {resposta.status_code}"
-    assert resposta.text.strip().lower() == "ok", f"corpo inesperado: {resposta.text!r}"
+    assert resposta.json() == {"status": "ok"}, f"corpo inesperado: {resposta.text!r}"
 
 
 @requer_url
@@ -73,13 +75,27 @@ def test_app_carregou():
     """A raiz devolve a pagina do app, e nao uma tela de erro da plataforma.
 
     Um 200 sozinho nao basta: a pagina de erro do Render tambem devolve 200 em
-    alguns casos. Por isso o teste procura marcadores do Streamlit no HTML.
+    alguns casos. Por isso o teste procura marcadores da pagina no HTML, e
+    confere que o script dela tambem e servido: sem ele a pagina abre e nao faz
+    nada.
     """
     resposta = _get()
     assert resposta.status_code == 200, f"raiz devolveu {resposta.status_code}"
-    corpo = resposta.text.lower()
-    assert "streamlit" in corpo, "o HTML nao parece ser de uma aplicacao Streamlit"
-    assert len(resposta.content) > 300, "resposta curta demais para ser a pagina do app"
+    assert 'id="app"' in resposta.text, "o HTML nao parece ser a pagina do FeedbackLoop"
+    assert _get("/static/app.js").status_code == 200, "o script da pagina nao e servido"
+
+
+@requer_url
+def test_api_responde_com_dados():
+    """A API devolve as 36 respostas de exemplo.
+
+    Exercita o caminho inteiro de uma rota da API, ate a leitura de um arquivo
+    do repositorio, sem chamar o provedor e sem custo. Pega deploy com arquivo
+    faltando ou rota quebrada, que o healthcheck nao ve.
+    """
+    resposta = _get("/api/exemplo")
+    assert resposta.status_code == 200, f"/api/exemplo devolveu {resposta.status_code}"
+    assert len(resposta.json()["respostas"]) == 36
 
 
 def test_cadeia_do_llm_construivel():
@@ -115,11 +131,10 @@ def test_app_importavel_sem_configuracao_extra():
     plataformas, entao producao passou a responder apenas com um traceback.
 
     O que torna esse caso instrutivo e o que NAO o pegou: os 7 testes offline
-    passaram, porque cobrem o pacote `feedbackloop/` e nao o `app.py`; o
-    healthcheck respondeu ok, porque o servidor do Streamlit sobe mesmo quando o
-    script falha; e o teste da pagina passou, porque o HTML de casca e servido
-    antes de o script rodar. O pipeline ficou inteiramente verde com a aplicacao
-    inutilizavel.
+    passaram, porque cobriam o pacote `feedbackloop/` e nao o `app.py`; o
+    healthcheck respondeu ok, porque o servidor do Streamlit, a interface da
+    epoca, subia mesmo quando o script falhava. O pipeline ficou inteiramente
+    verde com a aplicacao inutilizavel.
 
     Importar o modulo executa todo o codigo de nivel superior, que e onde esse
     tipo de defeito mora. Se `app.py` passar a exigir uma variavel de ambiente
@@ -134,5 +149,6 @@ def test_app_importavel_sem_configuracao_extra():
         os.environ["OPENAI_API_KEY"] = "sk-chave-falsa-apenas-para-importacao"
 
     modulo = importlib.import_module("app")
-    assert hasattr(modulo, "main"), "app.py nao expoe main()"
+    rotas = {getattr(r, "path", "") for r in modulo.app.routes}
+    assert "/api/analisar" in rotas, "app.py nao expoe a rota de analise"
     assert modulo.COLUNA_RESPOSTA, "COLUNA_RESPOSTA vazia"

@@ -1,17 +1,22 @@
-streamlit==1.40.0
+# Interface web. Substituiu o Streamlit na 1.2.0. Ver ADR-004.
+fastapi==0.115.6
+uvicorn==0.34.0
+# Transitivas do FastAPI fixadas pela mesma lição do httpx: o que não está
+# fixado muda sozinho entre um build e outro.
+starlette==0.41.3
+pydantic==2.13.5
 openai==1.50.0
 # httpx e transitiva do openai. A 0.28 removeu o argumento 'proxies' que o
 # openai 1.50.0 ainda passa, quebrando a construcao do cliente em runtime.
 # Fixada aqui porque pin incompleto nao e build reproduzivel. Ver ADR-003.
 httpx==0.27.2
-pandas==2.2.3
 python-dotenv==1.0.1
 pytest==8.3.3
 # Observabilidade. Ver ADR-003.
 langfuse==5.0.2
-# Transitivas fixadas pela mesma lição do httpx (ver post-mortem 29/08): o
-# Langfuse puxou protobuf 7.x, e o Streamlit 1.40 exige protobuf<6. O pip
-# instalou com só um aviso, e o build teria passado.
+# Transitivas do Langfuse fixadas pela mesma lição do httpx (ver post-mortem
+# 29/08). O protobuf foi fixado em 5.x quando a interface era Streamlit, que
+# exigia protobuf<6; segue fixado na versão testada em produção.
 protobuf==5.29.6
 opentelemetry-api==1.45.1
 opentelemetry-sdk==1.45.1

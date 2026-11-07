@@ -15,7 +15,7 @@ name: Monitor de producao
 #
 # Para testar o disparo sem derrubar nada, rode manualmente pela aba Actions
 # informando uma URL que nao e a aplicacao, como https://example.com: o
-# healthcheck dela responde 404 e o teste da pagina nao encontra o Streamlit.
+# healthcheck dela responde 404 e o teste da pagina nao encontra o FeedbackLoop.
 
 on:
   schedule:

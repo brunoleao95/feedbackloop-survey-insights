@@ -12,6 +12,7 @@
 
 import json
 import re
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -23,14 +24,37 @@ from feedbackloop.pii import sanitizar
 # o parser joga pra "neutro" (decisão preguiçosa, mas evita quebrar o pipeline).
 SENTIMENTOS_VALIDOS = ("positivo", "neutro", "negativo")
 
+# Taxonomia fixa de temas. O briefing pediu isso na semana 3: com o tema em
+# aberto, o modelo inventava um nome a cada resposta, e 36 respostas viravam 23
+# temas, o que esvazia a agregação, justamente o que o cliente compra. A lista
+# saiu das respostas de exemplo e dos exemplos do briefing. Cada tema traz o que
+# ele cobre, porque o nome sozinho deixa margem para o modelo hesitar.
+TEMAS = {
+    "Carga de trabalho": "volume de trabalho, hora extra, falta de pessoas, pressão e metas irreais, descanso",
+    "Liderança": "relação com a gestão direta, clareza de direção, autonomia, perfil da liderança",
+    "Remuneração": "salário, reajuste, poder de compra",
+    "Benefícios": "plano de saúde, vale-refeição, auxílios",
+    "Reconhecimento": "feedback, valorização, elogio formal",
+    "Carreira e desenvolvimento": "plano de carreira, promoção, aprendizado, cursos, crescimento",
+    "Ferramentas e infraestrutura": "sistemas, equipamentos, instabilidade técnica",
+    "Comunicação interna": "como as informações e mudanças chegam às pessoas",
+    "Processos e reuniões": "burocracia, aprovações, reuniões improdutivas",
+    "Cultura e clima": "ambiente, relação com colegas, respeito, diversidade, integração de novos",
+    "Flexibilidade e trabalho remoto": "home office, horário flexível, presencial",
+}
+TEMA_OUTROS = "Outros"
+
 SYSTEM_CLASSIFICACAO = """Você é um analista de RH especialista em clima organizacional.
 Recebe UMA resposta aberta de uma pesquisa de engajamento de funcionários (em português do Brasil).
-Sua tarefa: (1) identificar o TEMA principal em poucas palavras (ex: "Carga de trabalho",
-"Liderança", "Remuneração", "Reconhecimento", "Ferramentas", "Home office", "Comunicação");
+Sua tarefa: (1) escolher o TEMA principal, copiando EXATAMENTE um nome da lista abaixo;
 (2) classificar o SENTIMENTO como exatamente um entre: positivo, neutro, negativo.
 
+Temas (nome: o que cobre):
+""" + "\n".join(f"- {nome}: {cobre}" for nome, cobre in TEMAS.items()) + f"""
+- {TEMA_OUTROS}: use só se nenhum tema acima servir
+
 Responda SOMENTE com um JSON no formato:
-{"tema": "<tema curto>", "sentimento": "<positivo|neutro|negativo>"}
+{{"tema": "<nome da lista>", "sentimento": "<positivo|neutro|negativo>"}}
 """
 
 SYSTEM_RESUMO = """Você é um consultor de people analytics.
@@ -64,6 +88,25 @@ def parse_sentimento(bruto: str) -> str:
     return "neutro"
 
 
+def _chave_tema(texto: str) -> str:
+    """Forma de comparação: minúsculas e sem acento."""
+    sem_acento = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+    return " ".join(sem_acento.lower().split())
+
+
+_TEMAS_POR_CHAVE = {_chave_tema(t): t for t in [*TEMAS, TEMA_OUTROS]}
+
+
+def normalizar_tema(bruto: str) -> str:
+    """Devolve o nome canônico da taxonomia, ou "Outros".
+
+    Aceita diferença de caixa e de acento ("lideranca" vira "Liderança"). Um
+    tema fora da lista vira "Outros" em vez de abrir uma categoria nova: é isso
+    que mantém a agregação estável.
+    """
+    return _TEMAS_POR_CHAVE.get(_chave_tema(bruto or ""), TEMA_OUTROS)
+
+
 def parse_classificacao(bruto: str) -> dict:
     """Extrai {"tema", "sentimento"} do texto cru do LLM.
 
@@ -77,7 +120,9 @@ def parse_classificacao(bruto: str) -> dict:
     if trecho is not None:
         try:
             dado = json.loads(trecho)
-            tema = str(dado.get("tema", tema)).strip() or tema
+            bruto_tema = str(dado.get("tema", "")).strip()
+            if bruto_tema:
+                tema = normalizar_tema(bruto_tema)
             sentimento_bruto = str(dado.get("sentimento", ""))
         except (json.JSONDecodeError, AttributeError):
             pass
@@ -234,13 +279,18 @@ class ResultadoAnalise:
     # evitou. Somadas, dão o número de respostas mais um, o resumo.
     chamadas_llm: int = 0
     acertos_cache: int = 0
+    # Só a leitura qualitativa do modelo, sem o cabeçalho de números. A
+    # interface monta os números a partir dos campos estruturados acima.
+    texto_resumo: str = ""
 
 
 # Entrada e saída desligadas: este é o único ponto do sistema que recebe as
 # respostas cruas, com nomes, e a saída contém o texto original para exibição.
 # O que vai para o trace é só o que está em `metadata`, no fim da função.
 @observe(name="analise-pesquisa", capture_input=False, capture_output=False)
-def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> ResultadoAnalise:
+def analisar(
+    cliente, respostas: list[str], top_n: int = 8, cache=None, ao_progredir=None
+) -> ResultadoAnalise:
     """Pipeline ponta a ponta.
 
     Recebe a lista de respostas abertas e um `cliente` com método
@@ -249,6 +299,10 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
     Sem `cache`, faz 1 chamada de LLM por resposta mais 1 do resumo, toda vez
     que roda, como no protótipo. Com `cache`, o que já foi classificado nas
     últimas 24 horas volta sem chamar o provedor. Ver feedbackloop/cache.py.
+
+    `ao_progredir(feitas, total)`, se informado, é chamado a cada etapa
+    concluída: uma por resposta e uma pelo resumo. A interface usa isso para
+    mostrar o andamento de uma análise que leva dezenas de segundos.
     """
     respostas_limpas = [r.strip() for r in respostas if r and r.strip()]
 
@@ -297,6 +351,17 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
         except Exception:
             pass
 
+    etapas = len(respostas_limpas) + 1
+
+    def _avisar(feitas):
+        if ao_progredir is None:
+            return
+        try:
+            ao_progredir(feitas, etapas)
+        except Exception:
+            # Quem acompanha o andamento nunca derruba a análise.
+            pass
+
     classificacoes = []
     for resp, s in zip(respostas_limpas, sanitizadas):
         chave = cache.chave("classificacao", modelo, SYSTEM_CLASSIFICACAO, s.texto) if cache else None
@@ -317,6 +382,7 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
         c["resposta"] = resp
         c["texto_enviado"] = s.texto
         classificacoes.append(c)
+        _avisar(len(classificacoes))
 
     top_temas = contar_temas([c["tema"] for c in classificacoes])[:top_n]
     contagem = contar_sentimentos([c["sentimento"] for c in classificacoes])
@@ -336,6 +402,7 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
         if texto:
             _gravar_cache(chave_resumo, {"texto": texto})
     resumo = montar_resumo(top_temas, contagem, texto, len(respostas_limpas))
+    _avisar(etapas)
 
     # Métricas de qualidade da análise, usadas no dashboard. São indicadores
     # indiretos: o sistema não tem gabarito para saber se um tema está certo,
@@ -352,6 +419,11 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
             "pii_mascarada": pii_total,
             "temas_distintos": temas_distintos,
             "pulverizacao_temas": round(temas_distintos / total, 3) if total else 0,
+            # Com a taxonomia fixa, o sinal de tema que a lista não cobre é a
+            # fração de respostas que caíram em "Outros".
+            "taxa_outros": round(
+                sum(1 for c in classificacoes if c["tema"] == TEMA_OUTROS) / total, 3
+            ) if total else 0,
             "falhas_formato": falhas_formato,
             "taxa_formato_valido": round(1 - falhas_formato / total, 3) if total else 1,
             "sentimentos": contagem,
@@ -367,4 +439,5 @@ def analisar(cliente, respostas: list[str], top_n: int = 8, cache=None) -> Resul
         pii_mascarada=pii_total,
         chamadas_llm=chamadas_llm,
         acertos_cache=acertos_cache,
+        texto_resumo=(texto or "").strip(),
     )

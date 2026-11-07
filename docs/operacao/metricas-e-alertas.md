@@ -152,6 +152,13 @@ acerto. E a linha de base já é ruim: 23 temas em 36 respostas é a pulverizaç
 a auditoria apontou, causada pela ausência de taxonomia fixa. O limite de 0,75
 avisa se piorar; não diz que 0,639 está bom.
 
+**Atualização de 31/10/2026.** Com a [taxonomia fixa de temas](../otimizacao/taxonomia-de-temas.md),
+a pulverização medida caiu para **0,306** (11 temas em 36 respostas). O custo por
+análise subiu para **US$ 0,0138**, ainda abaixo do limite de US$ 0,02. Com a
+taxonomia, o teto possível passa a ser 12 temas, então a pulverização deixa de
+ser um bom sinal de degradação para pesquisas grandes: o sinal que a substitui é
+a fração de respostas em "Outros", que indica tema que a lista não cobre.
+
 ### Complementar: infraestrutura
 
 | | Linha de base | Limite | Onde ver |

@@ -51,7 +51,7 @@ class Cache:
         self.caminho = caminho
         self.ttl = ttl_segundos
         self._relogio = relogio
-        # O Streamlit executa cada sessão numa thread. A trava serializa o
+        # O servidor web atende cada análise numa thread. A trava serializa o
         # acesso, e check_same_thread=False permite compartilhar a conexão.
         self._trava = threading.Lock()
         self._con = sqlite3.connect(caminho, check_same_thread=False)
