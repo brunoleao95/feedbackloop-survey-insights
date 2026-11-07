@@ -5,6 +5,55 @@ e este projeto adere ao [Versionamento Semântico](https://semver.org/lang/pt-BR
 
 ## [Não publicado]
 
+## [1.2.0] - 2026-11-07
+
+O produto deixa de parecer protótipo e a agregação passa a ser legível. A
+interface herdada em Streamlit dá lugar a um site próprio, e os temas passam a
+sair de uma lista fixa, como o briefing pediu para a semana 3.
+
+### Por que MINOR
+
+A interface mudou por inteiro, mas o que o usuário faz e recebe é o mesmo:
+envia respostas, recebe tema, sentimento e resumo. A API nova é acréscimo. O
+pacote `feedbackloop/` manteve o contrato, com um parâmetro opcional a mais.
+Quem opera precisa trocar o Start Command no Render, e isso está no README.
+
+### Adicionado
+
+- **Interface web própria** (`app.py` com FastAPI, página em `static/`):
+  progresso real durante a análise, indicadores, sentimento dentro de cada
+  tema, tabela filtrável, cartão de privacidade com o texto enviado e download
+  do resultado em CSV. Ver [ADR-004](docs/adr/adr-004-interface-web-com-fastapi.md).
+- **API**: `/saude`, `/api/exemplo`, `/api/csv` e `/api/analisar`, esta em
+  NDJSON com um evento por resposta classificada.
+- **Taxonomia fixa de temas**: 11 temas e "Outros". Medido com o modelo real,
+  23 temas viraram 11, e os 8 temas da tela passaram a cobrir 31 de 36
+  respostas. O custo por análise subiu de US$ 0,0089 para US$ 0,0138. Ver
+  [a medição](docs/otimizacao/taxonomia-de-temas.md).
+- Limites de entrada: 300 respostas por análise e 2.000 caracteres por resposta.
+- `taxa_outros` nos metadados do trace, o sinal de tema que a lista não cobre.
+- Quinto smoke test, que exercita uma rota da API até a leitura de dados.
+- Capturas de tela, diagrama de arquitetura e janela de uptime no README.
+
+### Alterado
+
+- Saem `streamlit` e `pandas`. Entram `fastapi`, `uvicorn`, `starlette` e
+  `pydantic`, pinados. O CSV passa a ser lido com o módulo `csv` da biblioteca
+  padrão.
+- Start Command no Render: `uvicorn app:app --host 0.0.0.0 --port $PORT`, com
+  health check em `/saude`.
+- O executor dos workflows fica fixo em `ubuntu-24.04`.
+
+### Corrigido
+
+- Os workflows falhavam desde 20/10 porque o `ubuntu-latest` passou a ser o
+  26.04, sem build do Python 3.13.2. Produção não foi afetada; o monitor e o
+  pipeline, sim.
+- O disparo manual do pipeline testava e pulava o deploy. Em 07/11 o GitHub não
+  entregou o evento de push de um merge na `main`, e não havia como publicar sem
+  um commit novo. O monitor detectou a divergência e abriu a issue #3.
+
+
 ## [1.1.0] - 2026-10-16
 
 O sistema deixa de mandar dado pessoal sem tratamento para o provedor, passa a
@@ -170,7 +219,8 @@ Registrado aqui porque omitir seria pior do que admitir. Ver
 - Streamlit + um modelo GPT pequeno da OpenAI
 - Classificação de tema + sentimento por resposta e resumo executivo (Rafael)
 
-[Não publicado]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.1.0...HEAD
+[Não publicado]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/brunoleao95/feedbackloop-survey-insights/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/brunoleao95/feedbackloop-survey-insights/releases/tag/v1.0.0

@@ -17,6 +17,8 @@ com as 37 chamadas ao modelo, latência, custo e os nomes já substituídos por
 ## Sumário
 
 - [O problema e a solução](#o-problema-e-a-solução)
+- [Capturas de tela](#capturas-de-tela)
+- [Arquitetura](#arquitetura)
 - [Stack](#stack)
 - [Como rodar](#como-rodar)
 - [Variáveis de ambiente](#variáveis-de-ambiente)
@@ -48,16 +50,74 @@ Os números do resumo são calculados em código, não pedidos ao modelo. Só o 
 qualitativo vem do LLM: modelo de linguagem erra conta, e contagem de tema é
 exatamente o que o cliente compra.
 
-Com as 36 respostas de exemplo, uma análise custa **US$ 0,0088** e leva de 30 a
-57 segundos. Repetida dentro de 24 horas, custa **zero** e leva **3 milissegundos**.
+Os temas vêm de uma **lista fixa de 11 temas**, e não da criatividade do modelo:
+com o tema em aberto, 36 respostas viravam 23 temas; com a lista, viram 11.
+
+Com as 36 respostas de exemplo, uma análise custa **US$ 0,014** e leva de 30 a
+55 segundos, com o andamento visível na tela. Repetida dentro de 24 horas, custa
+**zero** e volta em menos de um segundo.
+
+## Capturas de tela
+
+Produção, com as 36 respostas de exemplo.
+
+**Entrada e indicadores.** Dados de exemplo, texto colado ou CSV arrastado.
+
+![Tela de entrada com os indicadores da análise](docs/imagens/01-entrada.jpg)
+
+**Resultado.** Resumo para a liderança, distribuição de sentimento e, em cada
+tema, quantas respostas são negativas.
+
+![Resumo, sentimento e temas](docs/imagens/02-resultado.jpg)
+
+**Privacidade.** O analista confere, resposta por resposta, o que saiu do
+servidor: os nomes chegam ao provedor como `[PESSOA]`.
+
+![Comparação entre o texto original e o texto enviado ao provedor](docs/imagens/03-privacidade.jpg)
+
+## Arquitetura
+
+```mermaid
+flowchart LR
+    analista["Analista de RH<br/>navegador"]
+
+    subgraph render["Render · Oregon · um processo"]
+        pagina["static/<br/>HTML, CSS e JS"]
+        api["app.py<br/>FastAPI"]
+        pipeline["pipeline.py<br/>orquestra a análise"]
+        pii["pii.py<br/>mascara nome, e-mail,<br/>CPF e telefone"]
+        cache[("cache.py<br/>SQLite, 24 h")]
+        llm["llm.py<br/>adaptador do provedor"]
+        obs["observabilidade.py<br/>máscara + traces"]
+    end
+
+    openai["OpenAI<br/>fora do Brasil"]
+    langfuse["Langfuse<br/>União Europeia"]
+
+    analista -->|HTTPS| pagina
+    analista -->|"POST /api/analisar<br/>progresso em NDJSON"| api
+    api --> pipeline
+    pipeline -->|"1. antes de tudo"| pii
+    pipeline -->|"2. já calculado?"| cache
+    pipeline -->|"3. só texto mascarado"| llm
+    llm -->|HTTPS| openai
+    pipeline -.-> obs
+    obs -.->|"só dado mascarado"| langfuse
+```
+
+Um único serviço, sem banco de dados. A ordem dentro do pipeline é a garantia de
+LGPD: nada chega ao `llm.py` sem passar pelo `pii.py`, e um teste com um cliente
+espião falha se qualquer nome de exemplo chegar ao provedor. O adaptador é o
+único ponto do código que conhece a OpenAI, o que permite testar tudo sem rede.
+Diagramas C4 em [`docs/architecture/`](docs/architecture/c4-contexto-e-containers.md).
 
 ## Stack
 
 | Camada | Escolha | Por quê |
 |---|---|---|
 | Linguagem | Python 3.13.2, fixado em `.python-version` | Ver [ADR-001](docs/adr/adr-001-adocao-da-stack-b.md) |
-| Interface | Streamlit 1.40 | Herdada do protótipo, suficiente para o uso |
-| Dados | pandas 2.2.3 | Leitura do CSV |
+| Servidor | FastAPI 0.115 com uvicorn 0.34 | API pequena e resposta em streaming. Ver [ADR-004](docs/adr/adr-004-interface-web-com-fastapi.md) |
+| Interface | HTML, CSS e JavaScript, sem framework | Uma página só, sem build e sem dependência externa |
 | LLM | OpenAI, modelo `gpt-5.4-mini`, SDK 1.50 com `httpx` 0.27.2 fixado | O adaptador em `feedbackloop/llm.py` é o único ponto que conhece o provedor |
 | Observabilidade | Langfuse Cloud, região UE, SDK 5.0.2 | Ver [ADR-003](docs/adr/adr-003-observabilidade-com-langfuse.md) |
 | Cache | SQLite, da biblioteca padrão | Sem serviço a mais. Ver [a otimização](docs/otimizacao/cache.md) |
@@ -65,19 +125,8 @@ Com as 36 respostas de exemplo, uma análise custa **US$ 0,0088** e leva de 30 a
 | CI/CD e alerta | GitHub Actions | Pipeline de publicação e monitor de produção |
 
 Todas as dependências, inclusive as transitivas que já quebraram o sistema uma
-vez, estão fixadas em `requirements.txt` com o motivo ao lado.
-
-```
-Analista de RH ──HTTPS──▶ Render: app.py ─▶ pipeline.py ─▶ pii.py (sanitiza)
-                                               │      └──▶ cache.py (SQLite, 24 h)
-                                               ▼
-                                            llm.py ──HTTPS──▶ OpenAI (fora do Brasil)
-                                               │
-                                               └─ observabilidade.py ──▶ Langfuse (UE, mascarado)
-```
-
-Diagramas C4 completos em
-[`docs/architecture/`](docs/architecture/c4-contexto-e-containers.md).
+vez, estão fixadas em `requirements.txt` com o motivo ao lado. O protótipo
+herdado usava Streamlit; a troca está registrada no ADR-004.
 
 ## Como rodar
 
@@ -87,25 +136,26 @@ cd feedbackloop-survey-insights
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env                                # e preencha OPENAI_API_KEY
-streamlit run app.py
+uvicorn app:app --reload
 ```
 
-O `app.py` carrega o `.env` sozinho. Escolha "Usar dados de exemplo" e clique em
-Analisar. Sem a chave, a interface carrega e só a análise falha, com mensagem
+Abra http://127.0.0.1:8000. O `app.py` carrega o `.env` sozinho. Deixe "Dados de
+exemplo" selecionado e clique em Analisar respostas. Sem a chave, a interface carrega e só a análise falha, com mensagem
 explícita. Sem as chaves do Langfuse, a telemetria fica desligada e o resto
 funciona igual.
 
-**Testes offline**, 40, que não chamam a API e não custam nada:
+**Testes offline**, 62, que não chamam a API e não custam nada:
 
 ```bash
 pytest tests --ignore=tests/smoke -q
 ```
 
-Cobrem o pipeline, a sanitização (incluindo um cliente espião que falha se
-qualquer nome chegar ao provedor), a máscara da telemetria e o cache, com um
-relógio falso que avança 24 horas para provar que a exclusão apaga de fato.
+Cobrem o pipeline, a taxonomia de temas, a sanitização (incluindo um cliente
+espião que falha se qualquer nome chegar ao provedor, pelo pacote e pela API), a
+máscara da telemetria, a API web e o cache, com um relógio falso que avança 24
+horas para provar que a exclusão apaga de fato.
 
-**Smoke tests**, 4, contra o que está publicado:
+**Smoke tests**, 5, contra o que está publicado:
 
 ```bash
 SMOKE_URL=https://feedbackloop-prod.onrender.com pytest tests/smoke -v
@@ -139,9 +189,14 @@ procedimento de rotação e auditoria do histórico do Git com `gitleaks` em
 | Desenvolvimento | `dev` | https://feedbackloop-dev.onrender.com | gratuito, hiberna após 15 min |
 
 O auto-deploy da plataforma está **desligado**. Quem publica é o pipeline em
-`.github/workflows/ci-cd.yml`: um push roda os testes, dispara o deploy pela API
-do Render, aguarda o serviço ficar no ar e roda os smoke tests contra o que foi
-publicado. O ambiente de destino sai do nome da branch. Leva cerca de 3 minutos.
+`.github/workflows/ci-cd.yml`: um push, ou um disparo manual, roda os testes,
+dispara o deploy pela API do Render, aguarda o serviço ficar no ar e roda os
+smoke tests contra o que foi publicado. O ambiente de destino sai do nome da
+branch. Leva cerca de 3 minutos.
+
+Configuração de cada serviço no Render: build `pip install -r requirements.txt`,
+start `uvicorn app:app --host 0.0.0.0 --port $PORT` e health check em `/saude`.
+Com o health check, o Render só troca a versão no ar quando a nova responde.
 
 Trabalho novo nasce na `dev`, é validado no ambiente de desenvolvimento e sobe
 para a `main` por merge.
@@ -160,18 +215,32 @@ detalhe, com o porquê de cada número, está em
 | Métrica | Linha de base | Limite |
 |---|---|---|
 | Latência por chamada | p50 1,05 s · p95 2,06 s · p99 3,38 s | p95 > 4 s (P3), > 8 s (P2) |
-| Custo por análise | US$ 0,0088 | > US$ 0,02 por análise ou > US$ 3,70 por dia (P2) |
+| Custo por análise | US$ 0,0138 (era 0,0088 antes da taxonomia) | > US$ 0,02 por análise ou > US$ 3,70 por dia (P2) |
 | Erro | 0 em 111 chamadas | qualquer smoke test falhando (P1) · > 2% das chamadas ou > 5% fora do formato (P2) |
 | Volume | 77 unidades do Langfuse por análise | 30 mil no mês, 60% da cota (P3) |
-| Qualidade | formato válido 1,00 · pulverização 0,639 | < 0,95 (P2) · > 0,75 (P3) |
+| Qualidade | formato válido 1,00 · pulverização 0,306 (era 0,639 antes da taxonomia) | formato < 0,95 (P2) · respostas em "Outros" acompanhadas |
 
 **Alerta configurado (P1).** O workflow
-[`monitor.yml`](.github/workflows/monitor.yml) roda os 4 smoke tests contra
-produção a cada 30 minutos. Se algum falha, abre uma issue com o rótulo
-`alerta-p1`, notificada por e-mail. Se a falha persiste, comenta na mesma issue.
-A primeira verificação que passa fecha a issue. Testado em 16/10/2026: apontado
-para um endereço que não é a aplicação, abriu a issue #1; na execução seguinte,
-contra produção, fechou.
+[`monitor.yml`](.github/workflows/monitor.yml) roda os 5 smoke tests contra
+produção. Se algum falha, abre uma issue com o rótulo `alerta-p1`, notificada
+por e-mail. Se a falha persiste, comenta na mesma issue. A primeira verificação
+que passa fecha a issue. Testado em 16/10/2026: apontado para um endereço que
+não é a aplicação, abriu a issue #1; na execução seguinte, contra produção,
+fechou.
+
+**O alerta já pegou um problema real.** Em 07/11/2026, o GitHub não disparou o
+pipeline de um merge na `main`, e produção ficou com o código antigo enquanto o
+repositório já tinha o novo. O monitor rodou, os testes novos falharam contra a
+versão antiga, e a issue #3 abriu. O deploy foi feito e a issue fechou sozinha
+cinco minutos depois.
+
+**Janela de uptime.** O monitor está configurado para cada 30 minutos, mas o
+agendador do GitHub executou, na prática, a cada 4,5 horas em média, com
+intervalo máximo de 10 horas. Entre 16/10 e 07/11 foram 115 verificações
+agendadas. Desde 22/10, **todas passaram**. As 11 falhas de 20 a 22/10 foram do
+executor do GitHub, que deixou de ter o Python do projeto, e não de produção. A
+última indisponibilidade real de produção foi a de 29/08, com 4min47s. Produção
+roda no plano pago e não hiberna.
 
 **Painéis.**
 
@@ -184,11 +253,14 @@ contra produção, fechou.
 
 Cada análise gera um trace com a árvore completa: a sanitização, cada
 classificação e o resumo, e nos metadados as contagens de PII mascarada, a taxa
-de formato válido, a pulverização de temas e a taxa de acerto do cache.
+de formato válido, a pulverização de temas, a fração em "Outros" e a taxa de
+acerto do cache.
 
 ## Otimizações
 
-**Cache das respostas do LLM**, com prazo de 24 horas.
+### 1. Cache das respostas do LLM
+
+Prazo de 24 horas.
 Detalhe em [`docs/otimizacao/cache.md`](docs/otimizacao/cache.md).
 
 Medido em produção, nas mesmas 36 respostas, pelos traces do Langfuse:
@@ -208,6 +280,23 @@ causa do cache: a diferença é variação do provedor, que já oscilava de 34 s
 resultado fica congelado por até 24 horas e o resumo deixa de variar entre
 execuções. Uma falha de formato nunca é guardada, para não ser repetida. A chave
 inclui o modelo e o prompt, então trocar qualquer um invalida o cache sozinho.
+
+### 2. Taxonomia fixa de temas
+
+Detalhe em [`docs/otimizacao/taxonomia-de-temas.md`](docs/otimizacao/taxonomia-de-temas.md).
+Medido com o modelo real, nas mesmas 36 respostas:
+
+| | Antes: tema em aberto | **Depois: lista de 11 temas** |
+|---|---|---|
+| Temas distintos | 23 | **11** |
+| Respostas cobertas pelos 8 temas da tela | 23 de 36 | **31 de 36** |
+| Custo por análise | US$ 0,0089 | US$ 0,0138 |
+
+**O trade-off é o inverso do cache.** Aqui se paga custo para ganhar qualidade:
+a lista de temas dobrou os tokens de entrada, e o custo subiu 56%. Ainda cabe
+folgado no orçamento: US$ 113 por mês pagam cerca de 8 mil análises desse
+tamanho. E menos temas não quer dizer temas certos: sem gabarito, o sistema mede
+se a agregação ficou legível, não se cada classificação está correta.
 
 ## Troubleshooting
 
@@ -243,16 +332,28 @@ OpenAI.
 uma análise nova, apague o arquivo em `CACHE_PATH` e reinicie o app. Em produção,
 qualquer deploy esvazia o cache, porque o disco do serviço é efêmero.
 
-**8. O `pip install` avisa conflito de `protobuf`.**
-O Langfuse puxa `protobuf` 7, e o Streamlit 1.40 exige menos que 6. Use o
-`requirements.txt` como está: a versão 5.29.6 e as do OpenTelemetry estão fixadas
-por isso. Ao atualizar o Langfuse, confira essa compatibilidade antes.
+**8. O deploy falha logo no início, com `uvicorn: command not found` ou `streamlit: command not found`.**
+O Start Command do serviço no Render não bate com o código. Desde a 1.2.0 ele é
+`uvicorn app:app --host 0.0.0.0 --port $PORT`. Ao trocar, mude o Start Command e
+publique o código novo em seguida: salvar o comando não reinicia o processo,
+mas qualquer reinício entre os dois passos derruba o site.
 
 **9. O primeiro pipeline depois de mudar dependências demora uns 6 minutos.**
 O build instala tudo sem cache de pacotes. Os seguintes voltam para cerca de 3
 minutos. Não é falha, e o smoke test espera o serviço subir.
 
-**10. Uma issue `alerta-p1` foi aberta.**
+**10. Fiz merge na `main` e produção continua com a versão antiga.**
+O GitHub pode não entregar o evento de push, e aí o pipeline não roda. Confira em
+*Actions* se existe execução para o commit da `main`. Se não existir, rode o
+workflow *CI/CD* manualmente na `main`: o disparo manual também publica. Foi o
+que aconteceu em 07/11/2026, e o monitor pegou.
+
+**11. Os workflows falham em "setup-python" sem rodar nenhum teste.**
+O executor mudou de versão e não tem o Python do projeto. Os workflows usam
+`ubuntu-24.04` fixo por isso; não troque por `ubuntu-latest`. Aconteceu entre 20
+e 22/10/2026.
+
+**12. Uma issue `alerta-p1` foi aberta.**
 Siga o
 [procedimento de resposta](docs/operacao/metricas-e-alertas.md#procedimento-de-resposta-ao-p1):
 o nome do teste que falhou diz a camada do problema, e se a falha começou logo
@@ -291,21 +392,26 @@ plano atual do Render guarda 7 dias.
 
 ## Limitações conhecidas
 
-O que a versão 1.0 apontava e esta versão resolveu: dado pessoal indo sem
-tratamento ao provedor, ausência de observabilidade e ausência de cache. O que
-continua aberto:
+O que já foi resolvido desde o protótipo: dado pessoal indo sem tratamento ao
+provedor, ausência de observabilidade, ausência de cache, interface de protótipo
+e temas inventados a cada resposta. O que continua aberto:
 
-- **A agregação se pulveriza.** Sem taxonomia fixa, as 36 respostas de exemplo
-  produzem 23 temas distintos. A métrica de pulverização mede isso, mas não
-  resolve
+- **Não há gabarito de qualidade.** A taxonomia reduziu os temas de 23 para 11,
+  mas o sistema não sabe se cada classificação está certa. O conjunto de
+  validação pedido no briefing não foi construído
+- **A lista de temas é fixa no código.** Um cliente com temas próprios exigiria
+  mudar o código
 - **A sanitização é por regra, não por modelo.** Nome escrito só em minúsculas,
   ou apelido, passa. O teste cobre os casos de exemplo, não todos os possíveis
 - **Só o alerta P1 é automático.** Os limites de latência, custo e qualidade
   são verificados nos painéis
 - **A análise é síncrona.** Com milhares de respostas, uma análise longa bloqueia
   a aplicação para outros visitantes
-- **Nada é histórico.** O resultado some quando a aba fecha, e o cache não
+- **Nada é histórico.** O resultado pode ser baixado em CSV, mas o servidor não
+  guarda análises, então não há comparação entre trimestres. O cache não
   substitui um histórico: ele expira e é esvaziado a cada deploy
+- **O monitor não roda a cada 30 minutos.** O agendador do GitHub executou, em
+  média, a cada 4,5 horas. Uma queda curta pode passar despercebida
 
 As 36 respostas em `data/respostas-pesquisa-exemplo.csv` são **sintéticas**, com
 nomes inventados de propósito. Leia
@@ -321,12 +427,14 @@ substituí-las.
 | [ADR-001](docs/adr/adr-001-adocao-da-stack-b.md) | Adoção da stack |
 | [ADR-002](docs/adr/adr-002-hospedagem-no-render.md) | Hospedagem e a divisão entre pago e gratuito |
 | [ADR-003](docs/adr/adr-003-observabilidade-com-langfuse.md) | Observabilidade com Langfuse |
+| [ADR-004](docs/adr/adr-004-interface-web-com-fastapi.md) | Interface web própria com FastAPI |
 | [Diagramas C4](docs/architecture/c4-contexto-e-containers.md) | Contexto, contêineres e componentes |
 | [Mapa de dados pessoais](docs/lgpd/mapa-de-dados.md) | Pontos de tratamento e base legal |
 | [Retenção e exclusão](docs/lgpd/retencao-e-exclusao.md) | Onde cada dado existe e quem apaga |
 | [Rotação de credenciais](docs/seguranca/rotacao-de-credenciais.md) | Inventário, procedimento e auditoria do histórico |
 | [Métricas e alertas](docs/operacao/metricas-e-alertas.md) | Linha de base, limites, alerta P1 e painéis |
 | [Otimização com cache](docs/otimizacao/cache.md) | Antes e depois, trade-off e como reproduzir |
+| [Taxonomia de temas](docs/otimizacao/taxonomia-de-temas.md) | 23 temas viram 11, e o custo disso |
 | [Post-mortem 29/08](docs/post-mortem-2026-08-29.md) | Indisponibilidade de 4min47s e o rollback |
 | [CHANGELOG](CHANGELOG.md) | Histórico de versões |
 

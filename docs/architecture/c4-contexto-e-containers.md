@@ -57,7 +57,7 @@ flowchart TB
     analista["Analista de RH<br/>[Pessoa]"]
 
     subgraph render["Render - regiao Oregon"]
-        app["Aplicacao Survey Insights<br/>[Container: Python 3.13.2 + Streamlit 1.40]<br/><br/>Processo unico, uma instancia.<br/>Serve a interface e executa a analise<br/>em lote no mesmo processo.<br/>Nao mantem estado entre sessoes."]
+        app["Aplicacao Survey Insights<br/>[Container: Python 3.13.2 + FastAPI 0.115]<br/><br/>Processo unico, uma instancia.<br/>Serve a interface e executa a analise<br/>em lote no mesmo processo.<br/>Nao mantem estado entre sessoes."]
     end
 
     llm["API do provedor de LLM<br/>[Container externo]<br/><br/>Modelo gpt-5.4-mini.<br/>Uma chamada por resposta,<br/>mais uma para o resumo."]
@@ -67,6 +67,13 @@ flowchart TB
 
     style llm stroke-dasharray: 5 5
 ```
+
+> **Atualização da versão 1.2.0 (07/11/2026).** A interface em Streamlit foi
+> substituída por um servidor FastAPI com página própria, ver
+> [ADR-004](../adr/adr-004-interface-web-com-fastapi.md). O contêiner continua
+> um só. Desde a 1.1.0 ele também envia traces mascarados ao Langfuse, na União
+> Europeia, e guarda um cache em SQLite no disco efêmero do serviço. O texto
+> abaixo descreve o ponto de partida da etapa 1 e foi mantido como registro.
 
 ### Por que este diagrama é tão pequeno
 
@@ -95,7 +102,7 @@ flowchart TB
     analista2["Analista de RH<br/>[Pessoa]"]
 
     subgraph appc["Aplicacao Survey Insights [Container]"]
-        ui["app.py<br/>[Componente: Streamlit]<br/><br/>Entrada de dados, disparo da<br/>analise e exibicao do resultado."]
+        ui["app.py + static/<br/>[Componente: FastAPI e pagina propria]<br/><br/>API de entrada, analise com progresso<br/>em NDJSON e exibicao do resultado."]
         pipeline["feedbackloop/pipeline.py<br/>[Componente: Python puro]<br/><br/>Orquestra a analise. Funcoes puras<br/>de parsing e agregacao,<br/>testaveis offline."]
         pii["feedbackloop/pii.py<br/>[Componente: sanitizador]<br/><br/>Mascara nome, e-mail, CPF e telefone.<br/>Funcao pura, sem rede."]
         adaptador["feedbackloop/llm.py<br/>[Componente: adaptador]<br/><br/>Unico ponto do codigo que conhece<br/>o provedor. Expoe apenas .completar."]
